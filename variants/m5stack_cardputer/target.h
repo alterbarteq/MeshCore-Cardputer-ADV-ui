@@ -26,6 +26,7 @@ class CardputerSensorManager : public SensorManager {
 public:
   CardputerSensorManager(LocationProvider &location): _location(&location), _node_prefs(nullptr) { }
   void setNodePrefs(void* prefs) { _node_prefs = prefs; }
+  LocationProvider* getLocationProvider() override { return _location; }
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;
   void loop() override;
