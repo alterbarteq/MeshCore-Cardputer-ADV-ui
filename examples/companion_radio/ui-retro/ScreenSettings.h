@@ -9,6 +9,7 @@ struct SettingItem {
     const char* label;
     char value[48];
     bool editable;
+    uint16_t color;   // kolor wartosci gdy wiersz nie jest zaznaczony
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,7 +82,7 @@ public:
                     d.fillRect(cx,y+1,CHAR_W-1,CHAR_H-2,C_TEXT_MID);
                 }
             } else {
-                d.setTextColor(inverted?C_BG:C_TEXT_MID, inverted?C_TEXT:C_BG);
+                d.setTextColor(inverted?C_BG:_items[i].color, inverted?C_TEXT:C_BG);
                 char tr[48]; strncpy(tr,_items[i].value,min(47,avail)); tr[min(47,avail)]='\0';
                 d.setCursor(lw,y); d.print(tr);
             }
@@ -183,14 +184,16 @@ private:
     void _buildItems() {
         _item_count=0;
 
-        // ── Tozsamosc ───────────────────────────────────────────────────────
-        _addItem("Node Name", _prefs?_prefs->node_name:"???", true);
-        _addItem("Node ID",   _node_id, false);
-        _addItem("Firmware",  _fw,      false);
+        // ── Tozsamosc ─────────────────────────────────────────────────────
+        // Kolory jak w dawnym ScreenMyNode: nazwa/callsign i pozycja GPS na
+        // akcent, uptime na jasno, bateria wg poziomu, reszta neutralnie.
+        _addItem("Node Name", _prefs?_prefs->node_name:"???", true, C_ACCENT);
+        _addItem("Node ID",   _node_id, false, C_TEXT_MID);
+        _addItem("Firmware",  _fw,      false, C_TEXT_MID);
 
         // ── Radio LoRa ──────────────────────────────────────────────────────
         char freq[16]; snprintf(freq,sizeof(freq),"%.3f",_prefs?_prefs->freq:868.0f);
-        _addItem("Freq MHz", freq, true);
+        _addItem("Freq MHz", freq, true, C_WARN);
         char sf[8]; snprintf(sf,sizeof(sf),"%d",_prefs?_prefs->sf:11);
         _addItem("SF", sf, true);
         char bw[16]; snprintf(bw,sizeof(bw),"%.0f",_prefs?_prefs->bw:125.0f);
@@ -210,31 +213,34 @@ private:
 
         char posbuf[32];
         if (_gps_fix) snprintf(posbuf,sizeof(posbuf),"%.4fN %.4fE", _lat6/1e6, _lon6/1e6);
-        _addItem("Pozycja", _gps_fix?posbuf:"BRAK SYGNALU", false);
+        _addItem("Pozycja", _gps_fix?posbuf:"BRAK SYGNALU", false, _gps_fix?C_ACCENT:C_TEXT_DIM);
 
         // ── System ──────────────────────────────────────────────────────────
         unsigned long s = millis()/1000;
         char up[16]; snprintf(up,sizeof(up),"%02lu:%02lu:%02lu", s/3600,(s%3600)/60,s%60);
-        _addItem("Uptime", up, false);
+        _addItem("Uptime", up, false, C_TEXT);
 
         char ram[16]; snprintf(ram,sizeof(ram),"%lu KB", (unsigned long)(_free_ram/1024));
-        _addItem("RAM", ram, false);
+        _addItem("RAM", ram, false, C_TEXT_MID);
 
-        char bat[24]; snprintf(bat,sizeof(bat),"%d%% (%d mV)", _battPct(_batt_mv), _batt_mv);
-        _addItem("Bateria", bat, false);
+        uint8_t pct = _battPct(_batt_mv);
+        char bat[24]; snprintf(bat,sizeof(bat),"%d%% (%d mV)", pct, _batt_mv);
+        uint16_t bat_col = pct > 40 ? C_TEXT : (pct > 15 ? C_WARN : C_RED_ERR);
+        _addItem("Bateria", bat, false, bat_col);
 
         // Losowy PIN parowania BLE (0 lub domyslne 123456 = brak wyswietlania,
         // patrz MyMesh::begin — wtedy uzywany jest tryb bez wyswietlacza).
         if (_ble_pin != 0 && _ble_pin != 123456) {
             char pin[12]; snprintf(pin,sizeof(pin),"%lu",(unsigned long)_ble_pin);
-            _addItem("BLE PIN", pin, false);
+            _addItem("BLE PIN", pin, false, C_ACCENT);
         }
     }
 
-    void _addItem(const char* label, const char* val, bool editable) {
+    void _addItem(const char* label, const char* val, bool editable, uint16_t color = C_TEXT_MID) {
         if (_item_count>=MAX_ITEMS) return;
         _items[_item_count].label=label;
         _items[_item_count].editable=editable;
+        _items[_item_count].color=color;
         strncpy(_items[_item_count].value, val, sizeof(_items[0].value)-1);
         _items[_item_count].value[sizeof(_items[0].value)-1]='\0';
         _item_count++;

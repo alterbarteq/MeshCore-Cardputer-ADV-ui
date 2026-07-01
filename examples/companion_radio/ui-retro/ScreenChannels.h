@@ -36,6 +36,11 @@ public:
         _need_redraw = true;
     }
 
+    // Potrzebne z zewnatrz, zeby odroznic "Enter zatwierdzil nazwe nowego
+    // kanalu" (wracamy do listy w tej samej nakladce) od "Enter wybral
+    // kanal z listy" (zamykamy nakladke i wracamy do czatu).
+    bool isAdding() const { return _adding; }
+
     void draw() override {
         if (!_need_redraw) return;
         _need_redraw = false;

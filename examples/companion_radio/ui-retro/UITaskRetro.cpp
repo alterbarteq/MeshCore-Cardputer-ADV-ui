@@ -235,8 +235,12 @@ void UITaskRetro::_handleKeys() {
 
     // Nakladka wyboru/dodawania kanalow ma priorytet nad reszta klawiszy
     if (_channel_overlay) {
+        bool was_adding = _channels.isAdding();
         bool consumed = _channels.onKey(ks);
-        if (consumed && ks.enter) _channel_overlay = false;   // wybrano/zapisano -> wroc do czatu
+        // Enter podczas wpisywania nazwy tylko zatwierdza kanal i wraca do
+        // LISTY (w tej samej nakladce) — nakladke zamykamy dopiero gdy Enter
+        // faktycznie wybral kanal z listy.
+        if (consumed && ks.enter && !was_adding) _channel_overlay = false;
         return;
     }
 
