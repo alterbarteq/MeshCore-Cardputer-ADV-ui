@@ -64,7 +64,13 @@ Press **Tab** from any tab to open a popup to send a self-advertisement:
 
 **↑/↓** to choose, **Enter** to send, **Del/Backspace/Tab** to cancel.
 
-## Building from source
+## Installing
+
+### Pre-built binary
+
+Grab the latest `.bin` from [Releases](https://github.com/alterbarteq/MeshCore-Cardputer-ADV-ui/releases) and flash it with `esptool.py` or the ESP Flash Download Tool.
+
+### Building from source
 
 ```bash
 git clone https://github.com/alterbarteq/MeshCore-Cardputer-ADV-ui.git
