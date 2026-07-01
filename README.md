@@ -1,5 +1,7 @@
 # 🔥 MeshCore-Cardputer-ADV 🔥
 
+> **📌 Fork notice:** This is a personal fork of [Stachugit/MeshCore-Cardputer-ADV](https://github.com/Stachugit/MeshCore-Cardputer-ADV) by Stanisław "Stachu" Piskorski, who did all of the original groundwork for this firmware (the base described throughout this README, including the chat/settings UI, LoRa cap integration, and web flasher). This fork replaces that UI with a custom "retro terminal" interface (`ui-retro`) — most of the feature descriptions and screenshots below still show Stachu's original UI, not this fork's. Please support his work at [buymeacoffee.com/Stachu](https://buymeacoffee.com/Stachu).
+
 [![Buy Me a Coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=☕&slug=Stachu&button_colour=ff8800&font_colour=000000&font_family=Lato&outline_colour=000000&coffee_colour=FFDD00)](https://buymeacoffee.com/Stachu)
 
 ## 🌐 Quick Flash via Web Flasher (Recommended)
@@ -171,7 +173,7 @@ pio run -e M5stack_cardputer_cap_lora1262_companion --target upload
 
 ## 🙏 Credits
 
-Based on [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh networking firmware. This project adds custom TFT UI, chat bubbles, comprehensive settings system, theme customization, and enhanced keyboard navigation.
+Based on [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh networking firmware. The bulk of this project — custom TFT UI, chat bubbles, comprehensive settings system, theme customization, enhanced keyboard navigation, and Cap LoRa-1262 support — is the work of [Stachugit/MeshCore-Cardputer-ADV](https://github.com/Stachugit/MeshCore-Cardputer-ADV) (Stanisław "Stachu" Piskorski). This fork builds on top of that with a separate, custom "retro terminal" UI (`ui-retro`).
 
 Cap LoRa-1262 compatibility fixes based on work by [sosprz](https://github.com/sosprz/meshcore-cardputer-adv).
 
