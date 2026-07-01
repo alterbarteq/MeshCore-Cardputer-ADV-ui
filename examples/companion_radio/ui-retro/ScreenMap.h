@@ -1,55 +1,41 @@
 #pragma once
 #include "ScreenBase.h"
 #include "ScreenNodes.h"
-#include <WiFi.h>
-#include <HTTPClient.h>
+#include <SD.h>
 #include <M5Cardputer.h>
 #include <math.h>
 
-// ScreenMap — retro dot-grid overlay with a real OpenStreetMap tile fetched
-// over WiFi when credentials + a GPS fix are available. Falls back to a
-// phosphor dot-grid (no real map imagery) if WiFi/network aren't available,
-// so the screen is never blank.
+// ScreenMap — retro dot-grid overlay with a real OpenStreetMap tile read
+// from a microSD card, with a phosphor dot-grid fallback if no card/tile is
+// available, so the screen is never blank.
 //
-// This board (Cardputer ADV / Stamp-S3A / ESP32-S3FN8) has NO PSRAM despite
-// what the board name suggests — ESP.getPsramSize() reads 0. A decoded
-// 256x256 RGB565 tile (131KB) will not fit in the ~130KB of internal SRAM
-// left free once WiFi/mesh/UI are running. So instead of decoding into an
-// offscreen sprite, we cache only the compressed PNG bytes (~10-40KB, fits
-// comfortably) and decode straight onto the real display on every redraw —
-// LovyanGFX's PNG decoder streams scanline-by-scanline, it doesn't need a
-// full framebuffer to do that.
+// WHY SD AND NOT WIFI: this board (Cardputer ADV / Stamp-S3A / ESP32-S3FN8)
+// has no PSRAM, and fetching tiles live over HTTPS needs more free heap for
+// the TLS handshake (mbedTLS) than is left once mesh+WiFi+BLE+UI are
+// running (~20KB free vs 30-40KB+ needed) — confirmed via serial log
+// ("SSL - Memory allocation failed") when this screen tried HTTPClient.
+// Reading a file from SD needs no TLS and barely any RAM.
 //
-// Tile math: standard Web Mercator slippy-map tiles (256x256 px),
-// https://tile.openstreetmap.org/{z}/{x}/{y}.png
+// Tile convention: standard Web Mercator slippy-map tiles (256x256 px PNG),
+// stored on the SD card as /maptiles/{z}/{x}/{y}.png — the same directory
+// layout most offline-map tools use, so tiles downloaded on a computer (e.g.
+// from tile.openstreetmap.org, respecting their usage policy) for the area
+// of interest can just be copied onto the card as-is.
 
 #define TILE_PX        256
 #define DOT_SELF       4
 #define DOT_NODE       3
 #define TILE_MAX_BYTES 60000    // sane upper bound for a compressed street tile
-#define WIFI_CONNECT_TIMEOUT_MS 15000
-#define TILE_FETCH_TIMEOUT_MS   8000
+#define SD_SPI_HZ      25000000
 
-enum class MapStatus { NO_WIFI, CONNECTING, FETCHING, OK, ERR, NO_GPS };
+enum class MapStatus { NO_SD, NOT_FOUND, OK, ERR, NO_GPS };
 
 static const char* const MAP_STATUS_LABELS[] = {
-    "BRAK WIFI", "LACZENIE...", "POBIERANIE...", "OK", "BLAD", "BRAK GPS"
+    "BRAK KARTY SD", "BRAK KAFELKA", "OK", "BLAD", "BRAK GPS"
 };
 
 class ScreenMap : public ScreenBase {
 public:
-    // Call before first use (and again whenever creds change in Settings)
-    void setWiFi(const char* ssid, const char* pass) {
-        bool changed = strcmp(_ssid, ssid) != 0 || strcmp(_pass, pass) != 0;
-        strncpy(_ssid, ssid, sizeof(_ssid) - 1); _ssid[sizeof(_ssid) - 1] = '\0';
-        strncpy(_pass, pass, sizeof(_pass) - 1); _pass[sizeof(_pass) - 1] = '\0';
-        if (changed) {
-            _wifi_attempted = false;
-            _invalidateTile();
-            _need_redraw = true;
-        }
-    }
-
     void setOwnPos(int32_t lat6, int32_t lon6) {
         bool had_gps = _have_gps;
         int32_t old_lat = _own_lat, old_lon = _own_lon;
@@ -72,26 +58,15 @@ public:
 
     void onEnter() override {
         _need_redraw = true;
-        if (!_ssid[0]) {
-            Serial.println("[MAP] Brak skonfigurowanego WiFi (Ustawienia -> WiFi SSID)");
-        } else if (WiFi.status() != WL_CONNECTED && !_wifi_attempted) {
-            Serial.printf("[MAP] Laczenie z WiFi: %s\n", _ssid);
-            _status = MapStatus::CONNECTING;
-            WiFi.begin(_ssid, _pass);
-            _wifi_connect_start = millis();
-            _wifi_attempted = true;
-        }
+        _ensureSD();
     }
 
-    void onLeave() override {
-        // keep WiFi connected between tab visits for faster subsequent loads
-    }
+    void onLeave() override {}
 
     ~ScreenMap() { if (_png_buf) free(_png_buf); }
 
     // ── draw ─────────────────────────────────────────────────────────────────
     void draw() override {
-        _checkWiFi();
         if (!_need_redraw && !_tile_dirty) return;
         _need_redraw = false;
         _tile_dirty  = false;
@@ -106,6 +81,8 @@ public:
             return;
         }
 
+        if (_sd_ready && !_tile_ready) _tryLoadTile();
+
         int cx = SCREEN_W / 2;
         int cy = CONTENT_Y + CONTENT_H / 2;
 
@@ -117,7 +94,7 @@ public:
             // top/bottom bars.
             d.setClipRect(0, CONTENT_Y, SCREEN_W, CONTENT_H);
             if (!d.drawPng(_png_buf, _png_len, cx - off_x, cy - off_y)) {
-                Serial.println("[MAP] drawPng() (redraw) nie powiodlo sie - kasuje kafelek");
+                Serial.println("[MAP] drawPng() nie powiodlo sie - kasuje kafelek");
                 _tile_ready = false;
             }
             d.clearClipRect();
@@ -147,18 +124,8 @@ public:
     }
 
 private:
-    // WiFi creds
-    char _ssid[33] = {};
-    char _pass[65] = {};
-    bool _wifi_attempted = false;
-    unsigned long _wifi_connect_start = 0;
-
-    // Give up after a couple of failed fetches instead of hammering the
-    // tile server forever (e.g. this board can't complete a TLS handshake
-    // with too little free heap - see _tryFetchTile()).
-    static const int MAX_FETCH_ATTEMPTS = 2;
-    int  _fetch_attempts = 0;
-    bool _gave_up = false;
+    bool _sd_ready      = false;
+    bool _sd_attempted  = false;
 
     // GPS state
     int32_t _own_lat = 0, _own_lon = 0;
@@ -170,45 +137,38 @@ private:
 
     // Map state
     int _zoom = 15;
-    MapStatus _status = MapStatus::NO_WIFI;
+    MapStatus _status = MapStatus::NO_SD;
     bool _need_redraw = true;
     bool _tile_dirty  = false;
     bool _tile_ready  = false;
-    bool _fetching    = false;
 
-    // Cached compressed PNG bytes for the current tile (regular heap - this
-    // board has no PSRAM). Re-decoded to the screen on every redraw.
+    // Cached compressed PNG bytes for the current tile, read from SD.
+    // Re-decoded to the screen on every redraw (cheap, local, no PSRAM).
     uint8_t* _png_buf = nullptr;
     int      _png_len = 0;
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    void _checkWiFi() {
-        if (_ssid[0] == '\0') return;
-
-        if (WiFi.status() == WL_CONNECTED) {
-            if (_status == MapStatus::CONNECTING || _status == MapStatus::NO_WIFI) {
-                Serial.printf("[MAP] WiFi polaczone, IP: %s\n", WiFi.localIP().toString().c_str());
-                _status = MapStatus::OK;
-                _tile_dirty = true;
-            }
-            if (!_tile_ready && !_fetching && !_gave_up && _have_gps) _tryFetchTile();
-        } else if (_status == MapStatus::CONNECTING) {
-            if (millis() - _wifi_connect_start > WIFI_CONNECT_TIMEOUT_MS) {
-                Serial.println("[MAP] Timeout laczenia z WiFi");
-                _status = MapStatus::NO_WIFI;
-                _tile_dirty = true;
-            }
+    void _ensureSD() {
+        if (_sd_ready || _sd_attempted) return;
+        _sd_attempted = true;
+#ifdef PIN_SD_CS
+        if (SD.begin(PIN_SD_CS, SPI, SD_SPI_HZ)) {
+            _sd_ready = true;
+            Serial.println("[MAP] Karta SD zamontowana");
         } else {
-            _status = MapStatus::NO_WIFI;
+            Serial.println("[MAP] Nie udalo sie zamontowac karty SD");
+            _status = MapStatus::NO_SD;
         }
+#else
+        Serial.println("[MAP] PIN_SD_CS nie zdefiniowany dla tego wariantu plytki");
+#endif
+        _tile_dirty = true;
     }
 
     void _invalidateTile() {
         _tile_ready = false;
         _tile_dirty = true;
-        _fetch_attempts = 0;
-        _gave_up = false;
     }
 
     // Convert lat/lon (6-decimal int) + zoom to OSM tile x,y (floor)
@@ -238,76 +198,54 @@ private:
         py = (int)((fy - floor(fy)) * TILE_PX);
     }
 
-    void _tryFetchTile() {
-        if (_fetching) return;
-        _fetch_attempts++;
-        if (_fetch_attempts > MAX_FETCH_ATTEMPTS) {
-            Serial.println("[MAP] Rezygnuje po kilku nieudanych probach - patrz log wyzej");
-            _gave_up = true;
-            _status = MapStatus::ERR;
-            _tile_dirty = true;
-            return;
-        }
+    void _tryLoadTile() {
+        if (!_sd_ready) { _status = MapStatus::NO_SD; return; }
 
         int tx, ty;
         _latLonToTile(_own_lat, _own_lon, _zoom, tx, ty);
 
-        _fetching = true;
-        _status = MapStatus::FETCHING;
-        _need_redraw = true;
+        char path[48];
+        snprintf(path, sizeof(path), "/maptiles/%d/%d/%d.png", _zoom, tx, ty);
 
-        char url[128];
-        snprintf(url, sizeof(url), "https://tile.openstreetmap.org/%d/%d/%d.png", _zoom, tx, ty);
-        Serial.printf("[MAP] Pobieram kafelek: %s (wolny heap: %u)\n", url, (unsigned)ESP.getFreeHeap());
-
-        bool ok = false;
-        HTTPClient http;
-        http.setTimeout(TILE_FETCH_TIMEOUT_MS);
-        if (http.begin(url)) {
-            http.addHeader("User-Agent", "MeshCore-Cardputer-ADV-retro-ui/1.0");
-            int code = http.GET();
-            Serial.printf("[MAP] HTTP GET -> %d\n", code);
-            if (code == 200) {
-                int len = http.getSize();
-                if (len > 0 && len < TILE_MAX_BYTES) {
-                    uint8_t* buf = (uint8_t*)malloc(len);
-                    if (buf) {
-                        WiFiClient* stream = http.getStreamPtr();
-                        int read = 0;
-                        unsigned long t0 = millis();
-                        while (read < len && millis() - t0 < TILE_FETCH_TIMEOUT_MS) {
-                            int avail = stream->available();
-                            if (avail > 0) {
-                                int chunk = stream->readBytes(buf + read, min(avail, len - read));
-                                read += chunk;
-                            } else {
-                                delay(1);
-                            }
-                        }
-                        Serial.printf("[MAP] Odebrano %d / %d bajtow\n", read, len);
-                        if (read == len) {
-                            if (_png_buf) free(_png_buf);
-                            _png_buf = buf;
-                            _png_len = len;
-                            ok = true;
-                        } else {
-                            free(buf);
-                        }
-                    } else {
-                        Serial.println("[MAP] malloc() na bufor PNG nie powiodlo sie");
-                    }
-                } else {
-                    Serial.printf("[MAP] Nieprawidlowy rozmiar odpowiedzi: %d\n", len);
-                }
-            }
-            http.end();
+        File f = SD.open(path, FILE_READ);
+        if (!f) {
+            Serial.printf("[MAP] Brak kafelka na SD: %s\n", path);
+            _status = MapStatus::NOT_FOUND;
+            return;
         }
 
-        _fetching = false;
-        _tile_ready = ok;
-        _status = ok ? MapStatus::OK : MapStatus::ERR;
-        _tile_dirty  = true;
-        _need_redraw = true;
+        int len = f.size();
+        if (len <= 0 || len > TILE_MAX_BYTES) {
+            Serial.printf("[MAP] Nieprawidlowy rozmiar pliku %s (%d bajtow)\n", path, len);
+            f.close();
+            _status = MapStatus::ERR;
+            return;
+        }
+
+        uint8_t* buf = (uint8_t*)malloc(len);
+        if (!buf) {
+            Serial.println("[MAP] malloc() na bufor PNG nie powiodlo sie");
+            f.close();
+            _status = MapStatus::ERR;
+            return;
+        }
+
+        int read = f.read(buf, len);
+        f.close();
+
+        if (read != len) {
+            Serial.printf("[MAP] Odczytano tylko %d / %d bajtow z %s\n", read, len, path);
+            free(buf);
+            _status = MapStatus::ERR;
+            return;
+        }
+
+        if (_png_buf) free(_png_buf);
+        _png_buf = buf;
+        _png_len = len;
+        _tile_ready = true;
+        _status = MapStatus::OK;
+        Serial.printf("[MAP] Wczytano kafelek: %s (%d bajtow)\n", path, len);
     }
 
     void _drawGrid(M5GFX& d) {

@@ -2,7 +2,6 @@
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/BaseChatMesh.h>
 #include <Utils.h>
-#include <Preferences.h>
 #include "target.h"
 
 extern MyMesh the_mesh;
@@ -35,10 +34,6 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
     // telefonie przy parowaniu (widoczny jest tylko w USTAWIENIACH).
     _settings.setBLEPin(the_mesh.getBLEPin());
 
-    // Wczytaj WiFi z NVS i przekaz do ekranu mapy (potrzebne do pobierania
-    // kafelkow OSM).
-    _loadWiFiCreds();
-
     // Przywroc stan GPS zapisany w NodePrefs — bez tego CardputerSensorManager
     // zawsze startuje z GPS wylaczonym (patrz komentarz w
     // CardputerSensorManager::begin()), wiec ustawienie "wlaczone" z
@@ -54,15 +49,6 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
 
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.fillScreen(C_BG);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.setTextColor(C_TEXT, C_BG);
-    M5Cardputer.Display.setCursor(30, 40);
-    M5Cardputer.Display.print("MESHCORE");
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(C_TEXT_DIM, C_BG);
-    M5Cardputer.Display.setCursor(60, 62);
-    M5Cardputer.Display.print("retro ui v0.1");
-    delay(1200);
 
     _switchTab(Tab::CHAT);
     _updateMyNodeScreen();
@@ -298,25 +284,8 @@ void UITaskRetro::_onSettingChange(const char* key, const char* val, void* ctx) 
             self->_node_prefs->gps_enabled ? "1" : "0");
     }
 
-    // WiFi SSID/Pass sa juz zapisane do NVS przez ScreenSettings::_commitEdit();
-    // tutaj tylko odswiezamy dane uzywane przez ekran mapy.
-    if (strcmp(key, "WiFi SSID") == 0 || strcmp(key, "WiFi Pass") == 0) {
-        self->_loadWiFiCreds();
-    }
-
     if (!self->_node_prefs) return;
     the_mesh.savePrefs();
-}
-
-void UITaskRetro::_loadWiFiCreds() {
-    char ssid[33] = {};
-    char pass[65] = {};
-    Preferences pref;
-    pref.begin("retro-ui", true);
-    pref.getString("wifi_ssid", ssid, sizeof(ssid));
-    pref.getString("wifi_pass", pass, sizeof(pass));
-    pref.end();
-    _map.setWiFi(ssid, pass);
 }
 
 // Static member definitions

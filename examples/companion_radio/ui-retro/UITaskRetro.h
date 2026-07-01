@@ -75,7 +75,6 @@ private:
     void _updateMyNodeScreen();
     void _drawFrame();
     void _wakScreen();
-    void _loadWiFiCreds();
 
     // Send callback (static trampoline)
     static void _onSend(const char* text, void* ctx);
