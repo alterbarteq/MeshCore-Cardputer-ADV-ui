@@ -13,7 +13,8 @@ public:
     // Call once per frame before drawing content
     static void draw(Tab active, int num_nodes,
                      uint16_t batt_mv, bool gps_fix,
-                     uint32_t tx_count, uint32_t rx_count, uint8_t err_count) {
+                     uint32_t tx_count, uint32_t rx_count, uint8_t err_count,
+                     bool chat_alert = false) {
 
         // Nothing shown here changed since the last call (e.g. user is just
         // typing in the chat compose bar) — skip the redraw so the top/bottom
@@ -25,10 +26,12 @@ public:
         static bool     s_gps_fix;
         static uint32_t s_tx_count, s_rx_count;
         static uint8_t  s_err_count;
+        static bool     s_chat_alert;
 
         if (s_drawn && active == s_active && num_nodes == s_num_nodes &&
             batt_mv == s_batt_mv && gps_fix == s_gps_fix &&
-            tx_count == s_tx_count && rx_count == s_rx_count && err_count == s_err_count) {
+            tx_count == s_tx_count && rx_count == s_rx_count && err_count == s_err_count &&
+            chat_alert == s_chat_alert) {
             return;
         }
         s_drawn     = true;
@@ -39,6 +42,7 @@ public:
         s_tx_count  = tx_count;
         s_rx_count  = rx_count;
         s_err_count = err_count;
+        s_chat_alert = chat_alert;
 
         M5GFX& d = M5Cardputer.Display;
 
@@ -52,9 +56,10 @@ public:
         d.setCursor(2, 3);
         d.print("\xE2\xAC\xA1MC"); // ⬡ MC  (approx – non-ASCII may render as '?', safe fallback)
 
-        // tab labels
-        const uint16_t tab_w[]  = { 44, 50, 44, 76 };  // widths per label
-        const uint16_t tab_x[]  = { 26, 70, 120, 164 };
+        // tab labels — F4 skrocone do "F4:UST" zwalnia miejsce na wykrzyknik
+        // powiadomienia zaraz po F1.
+        const uint16_t tab_w[]  = { 44, 50, 44, 44 };  // widths per label
+        const uint16_t tab_x[]  = { 26, 80, 131, 176 };
 
         for (int i = 0; i < (int)Tab::COUNT; i++) {
             bool is_active = ((int)active == i);
@@ -67,6 +72,14 @@ public:
             }
             d.setCursor(tab_x[i], 3);
             d.print(TAB_LABELS[i]);
+        }
+
+        // Wykrzyknik: nowa wiadomosc czeka na innym kanale niz aktualnie
+        // wybrany — widoczny niezaleznie od tego, ktora zakladka jest otwarta.
+        if (chat_alert) {
+            d.setTextColor(C_WARN, C_BG);
+            d.setCursor(72, 3);
+            d.print("!");
         }
 
         // thin separator line below tab bar

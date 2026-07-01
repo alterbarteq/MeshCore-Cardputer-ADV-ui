@@ -60,5 +60,5 @@ static const char* const TAB_LABELS[] = {
     "F1:CZAT",
     "F2:WEZLY",
     "F3:MAPA",
-    "F4:WEZEL/UST",
+    "F4:UST",
 };

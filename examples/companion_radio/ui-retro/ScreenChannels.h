@@ -12,16 +12,19 @@ public:
     using AddFn       = bool(*)(const char* name, void* ctx);
     using GetActiveFn = int(*)(void*);
     using SetActiveFn = void(*)(int idx, void*);
+    using GetUnreadFn = int(*)(int idx, void*);
 
     void setCallbacks(CountFn count, GetNameFn getName,
                       AddFn add,
                       GetActiveFn getAct, SetActiveFn setAct,
+                      GetUnreadFn getUnread,
                       void* ctx) {
         _countFn     = count;
         _getNameFn   = getName;
         _addFn       = add;
         _getActiveFn = getAct;
         _setActiveFn = setAct;
+        _getUnreadFn = getUnread;
         _ctx         = ctx;
         _need_redraw = true;
     }
@@ -83,6 +86,17 @@ public:
             char disp[38] = {};
             strncpy(disp, name, 37);
             d.print(disp);
+
+            // Liczba nieprzeczytanych wiadomosci na tym kanale, na zolto —
+            // znika, gdy uzytkownik faktycznie przelaczy sie na ten kanal
+            // (patrz UITaskRetro::_syncActiveChannelToChat).
+            int unread = _getUnreadFn ? _getUnreadFn(i, _ctx) : 0;
+            if (unread > 0) {
+                char cnt[16];
+                snprintf(cnt, sizeof(cnt), " (%d)", unread);
+                d.setTextColor(C_WARN, bg);
+                d.print(cnt);
+            }
 
             y += LINE_H;
         }
@@ -157,6 +171,7 @@ private:
     AddFn       _addFn       = nullptr;
     GetActiveFn _getActiveFn = nullptr;
     SetActiveFn _setActiveFn = nullptr;
+    GetUnreadFn _getUnreadFn = nullptr;
     void*       _ctx         = nullptr;
 
     int  _sel = 0, _scroll = 0;

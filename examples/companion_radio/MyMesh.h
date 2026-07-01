@@ -97,7 +97,7 @@ public:
 
   void loop();
   void handleCmdFrame(size_t len);
-  bool advert();
+  bool advert(bool flood = false);
   void enterCLIRescue();
   
   void queueOutgoingMessageForBLE(const ContactInfo* contact, const ChannelDetails* channel,

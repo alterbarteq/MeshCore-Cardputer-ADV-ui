@@ -49,6 +49,15 @@ private:
     bool _channel_overlay = false;
     int  _active_channel  = 0;
 
+    // Ile nieprzeczytanych wiadomosci czeka na kazdym kanale (przyszly, gdy
+    // dany kanal nie byl aktywny) — steruje wykrzyknikiem obok F1:CZAT w
+    // gornym pasku i licznikiem "(N)" w nakladce wyboru kanalu.
+    int _unread_count[MAX_GROUP_CHANNELS] = {};
+
+    // Nakladka wyboru typu advertu ("tab" z dowolnej zakladki)
+    bool _advert_overlay = false;
+    int  _advert_sel     = 0;
+
     // Hardware
     DisplayDriver* _display    = nullptr;
     SensorManager* _sensors    = nullptr;
@@ -79,6 +88,14 @@ private:
     void _drawFrame();
     void _wakScreen();
     void _closeChannelOverlay();
+    // Przekazuje aktualnie wybrany kanal (self->_active_channel) do ScreenChat,
+    // zeby naglowek i filtrowanie wiadomosci byly zawsze zgodne z tym, na co
+    // faktycznie wysylane sa wiadomosci.
+    void _syncActiveChannelToChat();
+    bool _anyUnreadChannel() const;
+    void _drawAdvertOverlay();
+    void _closeAdvertOverlay();
+    void _sendAdvert(bool flood);
 
     // Send callback (static trampoline)
     static void _onSend(const char* text, void* ctx);
@@ -90,4 +107,5 @@ private:
     static bool _chAdd(const char* name, void* ctx);
     static int  _chGetActive(void* ctx);
     static void _chSetActive(int idx, void* ctx);
+    static int  _chGetUnread(int idx, void* ctx);
 };

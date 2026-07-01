@@ -70,6 +70,7 @@ struct ChatMsg {
     char text[CHAT_MSG_LEN];
     bool outgoing;
     bool is_channel;
+    int  channel_idx;   // prawdziwy indeks kanalu mesh, do ktorego nalezy
     int  typed_chars;   // ile znakow juz wpisano (typewriter)
     bool typing_done;   // czy animacja skonczona
 };
@@ -81,10 +82,24 @@ public:
 
     void onEnter() override { _need_redraw = true; }
 
+    // Wywolywane z UITaskRetro za kazdym razem gdy zmienia sie aktywny kanal
+    // (wybor z listy, nowo utworzony kanal, stan poczatkowy) — czat pokazuje
+    // wtedy tylko wiadomosci nalezace do tego kanalu.
+    void setActiveChannel(int channel_idx, const char* channel_name) {
+        if (_active_channel_idx == channel_idx) return;
+        _active_channel_idx = channel_idx;
+        strncpy(_active_channel_name, channel_name, sizeof(_active_channel_name) - 1);
+        _active_channel_name[sizeof(_active_channel_name) - 1] = '\0';
+        _scroll_to_bottom = true;
+        _doScrollToBottom();
+        _need_redraw = true;
+    }
+
     // Wywoluj z loop() co klatke
     void tick() {
-        if (_msg_count == 0) return;
-        ChatMsg& last = _msgs[_msg_count - 1];
+        int idx = _lastMsgIdxForActiveChannel();
+        if (idx < 0) return;
+        ChatMsg& last = _msgs[idx];
         if (last.typing_done) return;
 
         uint32_t now = millis();
@@ -102,11 +117,12 @@ public:
     }
 
     bool isTyping() {
-        if (_msg_count == 0) return false;
-        return !_msgs[_msg_count-1].typing_done;
+        int idx = _lastMsgIdxForActiveChannel();
+        if (idx < 0) return false;
+        return !_msgs[idx].typing_done;
     }
 
-    void addMessage(const char* from, const char* text, bool outgoing, bool is_channel) {
+    void addMessage(const char* from, const char* text, bool outgoing, bool is_channel, int channel_idx) {
         int idx = _msg_count < CHAT_MAX_MSGS ? _msg_count : CHAT_MAX_MSGS - 1;
         if (_msg_count >= CHAT_MAX_MSGS)
             memmove(_msgs, _msgs + 1, sizeof(ChatMsg) * (CHAT_MAX_MSGS - 1));
@@ -120,11 +136,9 @@ public:
         if (!outgoing) {
             // Wiadomosci grupowe/kanalowe przychodza jako "Nadawca: tresc"
             // zapisane w samym tekscie — `from` to w rzeczywistosci nazwa
-            // kanalu (np. "Public"). Pokazujemy ja raz w naglowku na gorze,
-            // a nie przy kazdej linii, i wyciagamy prawdziwego nadawce z tekstu.
-            strncpy(_channel_name, from, sizeof(_channel_name) - 1);
-            _channel_name[sizeof(_channel_name) - 1] = '\0';
-
+            // kanalu (np. "Public"), ktora UITaskRetro juz przekazal osobno
+            // przez setActiveChannel()/channel_idx. Tutaj wyciagamy tylko
+            // prawdziwego nadawce z tekstu.
             const char* colon = strchr(text, ':');
             if (colon && colon > text && (colon - text) < CHAT_FROM_LEN - 1) {
                 int name_len = colon - text;
@@ -140,15 +154,24 @@ public:
         depolish(body, _msgs[idx].text, CHAT_MSG_LEN);
         _msgs[idx].outgoing    = outgoing;
         _msgs[idx].is_channel  = is_channel;
-        _msgs[idx].typed_chars = 0;
-        _msgs[idx].typing_done = false;
+        _msgs[idx].channel_idx = channel_idx;
+        // tick()/isTyping() animuja wylacznie NAJNOWSZA wiadomosc aktywnego
+        // kanalu — jesli wiadomosc trafia na kanal, ktory nie jest teraz
+        // ogladany (np. kilka wiadomosci czeka, zanim uzytkownik w ogole
+        // otworzy ten kanal), nigdy nie zostanie "domowa" przez tick() i
+        // zostalaby trwale pusta (widac by bylo tylko nadawce, bez tresci).
+        // Animacja ma sens tylko dla wiadomosci, ktora realnie przychodzi na
+        // ekranie na zywo — reszta pojawia sie od razu w calosci.
+        bool live = (channel_idx == _active_channel_idx);
+        _msgs[idx].typed_chars = live ? 0 : strlen(_msgs[idx].text);
+        _msgs[idx].typing_done = !live;
         _last_type_ms = millis();
-        if (_scroll_to_bottom) _doScrollToBottom();
+        if (live && _scroll_to_bottom) _doScrollToBottom();
         _need_redraw = true;
     }
 
     void onNewMessage(const char* from, const char* text, bool is_channel) override {
-        addMessage(from, text, false, is_channel);
+        addMessage(from, text, false, is_channel, _active_channel_idx);
     }
 
     void draw() override {
@@ -166,9 +189,9 @@ public:
 
             // Naglowek kanalu — raz na gorze, nie powtarzany przy kazdej wiadomosci
             d.fillRect(0, CONTENT_Y, SCREEN_W, CHAT_HDR_H, C_BG);
-            d.setTextColor(C_TEXT_DIM, C_BG);
+            d.setTextColor(C_ACCENT, C_BG);
             d.setCursor(2, CONTENT_Y + 1);
-            d.print(_channel_name[0] ? _channel_name : "---");
+            d.print(_active_channel_name[0] ? _active_channel_name : "---");
             hline(CONTENT_Y + LINE_H - 1);
 
             // Clear only the message area — the compose bar below is redrawn
@@ -178,9 +201,11 @@ public:
             int y = MSG_TOP;
             int max_y = MSG_TOP + MSG_AREA_H;
             int line = 0;
+            int last_idx = _lastMsgIdxForActiveChannel();
 
             for (int i = 0; i < _msg_count; i++) {
                 ChatMsg& m = _msgs[i];
+                if (m.channel_idx != _active_channel_idx) continue;   // inny kanal — nie miesza sie z tym widokiem
 
                 // Dla wiadomosci w trakcie pisania — ogranicz tekst
                 char vis_text[CHAT_MSG_LEN];
@@ -200,8 +225,8 @@ public:
                     if (line >= _scroll_offset && y + LINE_H <= max_y) {
                         _drawLine(d, m.from, txt_src, m.outgoing, sl,
                                   offsets[sl], counts[sl], y,
-                                  // kursor: ostatnia linia ostatniej wiadomosci w trakcie pisania
-                                  (i == _msg_count-1 && !m.typing_done && sl == nl-1));
+                                  // kursor: ostatnia linia ostatniej wiadomosci (tego kanalu) w trakcie pisania
+                                  (i == last_idx && !m.typing_done && sl == nl-1));
                         y += LINE_H;
                     }
                     line++;
@@ -231,7 +256,7 @@ public:
         if (ks.enter) {
             if (_input[0] != '\0' && _send_fn) {
                 _send_fn(_input, _send_ctx);
-                addMessage("Ty", _input, true, false);
+                addMessage("Ty", _input, true, false, _active_channel_idx);
                 // wlasna wiadomosc pojawia sie od razu (nie typewriter)
                 _msgs[_msg_count-1].typed_chars = strlen(_msgs[_msg_count-1].text);
                 _msgs[_msg_count-1].typing_done = true;
@@ -245,7 +270,7 @@ public:
             if (c == '\n' || c == '\r') {
                 if (_input[0] != '\0' && _send_fn) {
                     _send_fn(_input, _send_ctx);
-                    addMessage("Ty", _input, true, false);
+                    addMessage("Ty", _input, true, false, _active_channel_idx);
                     // wlasna wiadomosc pojawia sie od razu (nie typewriter)
                     _msgs[_msg_count-1].typed_chars = strlen(_msgs[_msg_count-1].text);
                     _msgs[_msg_count-1].typing_done = true;
@@ -298,9 +323,17 @@ private:
     bool _need_redraw = true;
     bool _input_dirty = false;
     uint32_t _last_type_ms = 0;
-    char _channel_name[CHAT_CHANNEL_LEN] = {};
+    int  _active_channel_idx = -1;   // -1 = jeszcze nie ustawiony przez UITaskRetro
+    char _active_channel_name[CHAT_CHANNEL_LEN] = {};
     SendFn _send_fn   = nullptr;
     void*  _send_ctx  = nullptr;
+
+    int _lastMsgIdxForActiveChannel() {
+        for (int i = _msg_count - 1; i >= 0; i--) {
+            if (_msgs[i].channel_idx == _active_channel_idx) return i;
+        }
+        return -1;
+    }
 
     int _fitChars(const char* txt, int start, int max_c) {
         int tlen = strlen(txt);
@@ -343,6 +376,7 @@ private:
         int total = 0;
         int offsets[12], counts[12], nl;
         for (int i = 0; i < _msg_count; i++) {
+            if (_msgs[i].channel_idx != _active_channel_idx) continue;
             // Zawsze liczymy na podstawie docelowej (pelnej) tresci, nie tego
             // co juz "wpisal" typewriter — inaczej w momencie dodania nowej
             // wiadomosci (typed_chars==0) liczylaby sie ona jako pusta linia

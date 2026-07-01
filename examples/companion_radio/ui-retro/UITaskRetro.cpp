@@ -3,6 +3,7 @@
 #include <helpers/BaseChatMesh.h>
 #include <Utils.h>
 #include "target.h"
+#include "MeshCoreLogo.h"
 
 extern MyMesh the_mesh;
 
@@ -32,6 +33,19 @@ static int mapChannelIndex(int logical_idx) {
     return -1;
 }
 
+// Znajduje prawdziwy indeks kanalu po nazwie (uzywane przy odbiorze
+// wiadomosci — MyMesh przekazuje nazwe kanalu, nie jego indeks). Gdy nie
+// znaleziono (np. wiadomosc prywatna, nazwa nadawcy zamiast kanalu), zwraca
+// 0 ("Public"), zeby wiadomosc nie zniknela zamiast trafic gdziekolwiek.
+static int findChannelIndexByName(const char* name) {
+    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+        ChannelDetails ch;
+        if (the_mesh.getChannel(i, ch) && ch.name[0] != '\0' && strcmp(ch.name, name) == 0)
+            return i;
+    }
+    return 0;
+}
+
 // PSK kanalow "#nazwa" — pierwsze 16 bajtow SHA256("#nazwa"), zakodowane w
 // base64. Ta sama konwencja co inne klienty MeshCore (apka/CLI), zeby dwa
 // urzadzenia wpisujace ta sama nazwe kanalu dostaly identyczny klucz bez
@@ -42,41 +56,6 @@ static void deriveChannelPSK(const char* name, char* psk_b64_out, size_t out_len
     unsigned int enc_len = encode_base64(hash, 16, (unsigned char*)psk_b64_out);
     if (enc_len >= out_len) enc_len = out_len - 1;
     psk_b64_out[enc_len] = '\0';
-}
-
-// ── Blokowa bitmapa 5x7 na ekran powitalny ("MESHCORE" z kafelkow) ─────────
-static const uint8_t GLYPH_M[7] = {0b10001,0b11011,0b10101,0b10101,0b10001,0b10001,0b10001};
-static const uint8_t GLYPH_E[7] = {0b11111,0b10000,0b10000,0b11110,0b10000,0b10000,0b11111};
-static const uint8_t GLYPH_S[7] = {0b01111,0b10000,0b10000,0b01110,0b00001,0b00001,0b11110};
-static const uint8_t GLYPH_H[7] = {0b10001,0b10001,0b10001,0b11111,0b10001,0b10001,0b10001};
-static const uint8_t GLYPH_C[7] = {0b01111,0b10000,0b10000,0b10000,0b10000,0b10000,0b01111};
-static const uint8_t GLYPH_O[7] = {0b01110,0b10001,0b10001,0b10001,0b10001,0b10001,0b01110};
-static const uint8_t GLYPH_R[7] = {0b11110,0b10001,0b10001,0b11110,0b10100,0b10010,0b10001};
-
-static const uint8_t* glyphFor(char c) {
-    switch (c) {
-        case 'M': return GLYPH_M;
-        case 'E': return GLYPH_E;
-        case 'S': return GLYPH_S;
-        case 'H': return GLYPH_H;
-        case 'C': return GLYPH_C;
-        case 'O': return GLYPH_O;
-        case 'R': return GLYPH_R;
-        default:  return nullptr;
-    }
-}
-
-// Rysuje jedna litere jako siatke 5x7 kwadracikow ("kafelkow")
-static void drawTileGlyph(M5GFX& d, int x, int y, const uint8_t* glyph,
-                          uint16_t color, int tile, int gap) {
-    int pitch = tile + gap;
-    for (int row = 0; row < 7; row++) {
-        for (int col = 0; col < 5; col++) {
-            if (glyph[row] & (1 << (4 - col))) {
-                d.fillRect(x + col * pitch, y + row * pitch, tile, tile, color);
-            }
-        }
-    }
 }
 
 UITaskRetro::UITaskRetro(mesh::MainBoard* board, BaseSerialInterface* serial_iface)
@@ -96,7 +75,7 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
     _chat.setSendCallback(_onSend, this);
     _settings.setPrefs(node_prefs);
     _settings.setChangeCallback(_onSettingChange, this);
-    _channels.setCallbacks(_chCount, _chGetName, _chAdd, _chGetActive, _chSetActive, this);
+    _channels.setCallbacks(_chCount, _chGetName, _chAdd, _chGetActive, _chSetActive, _chGetUnread, this);
 
     // Losowy PIN parowania BLE jest ustalany raz w MyMesh::begin() (przed
     // ui_task.begin()) — bez tego nigdzie nie bylo widac, co wpisac w
@@ -119,40 +98,19 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.fillScreen(C_BG);
 
-    // Ekran powitalny — "MESHCORE" zbudowany z kwadratowych kafelkow (jak
-    // logo TORLINK), litera po literze w gradiencie jasny liliowy -> ciemny
-    // fiolet/indygo, + malutkie "v0.1" pod spodem
+    // Ekran powitalny — gotowe logo "MESHCORE" (PNG z przezroczystym tlem,
+    // patrz assets/meshcore_logo.png / MeshCoreLogo.h), + malutkie "v0.1" pod spodem.
     {
         M5GFX& d = M5Cardputer.Display;
 
-        const char* title = "MESHCORE";
-        int n = strlen(title);
-        const int tile = 4, gap = 1, pitch = tile + gap;
-        const int letter_w = 4 * pitch + tile;  // 5 kolumn
-        const int letter_h = 6 * pitch + tile;  // 7 wierszy
-        const int letter_spacing = 5;
-        int total_w = n * letter_w + (n - 1) * letter_spacing;
-        int x = (SCREEN_W - total_w) / 2;
-        int y = 32;
-
-        // jasny liliowy -> ciemny fiolet/indygo
-        const uint8_t r1 = 245, g1 = 240, b1 = 255;
-        const uint8_t r2 = 90,  g2 = 40,  b2 = 170;
-
-        for (int i = 0; i < n; i++) {
-            float t = (n > 1) ? (float)i / (n - 1) : 0.0f;
-            uint8_t r = r1 + (int)((r2 - r1) * t);
-            uint8_t g = g1 + (int)((g2 - g1) * t);
-            uint8_t b = b1 + (int)((b2 - b1) * t);
-            const uint8_t* glyph = glyphFor(title[i]);
-            if (glyph) drawTileGlyph(d, x, y, glyph, RGB565(r, g, b), tile, gap);
-            x += letter_w + letter_spacing;
-        }
+        int x = (SCREEN_W - (int)meshcore_logo_w) / 2;
+        int y = 40;
+        d.drawPng(meshcore_logo_png, meshcore_logo_png_len, x, y);
 
         d.setTextSize(1);
         d.setTextColor(C_TEXT_DIM, C_BG);
         int vw = d.textWidth("v0.1");
-        d.setCursor((SCREEN_W - vw) / 2, y + letter_h + 10);
+        d.setCursor((SCREEN_W - vw) / 2, y + (int)meshcore_logo_h + 12);
         d.print("v0.1");
 
         delay(1200);
@@ -160,6 +118,7 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
     }
 
     _switchTab(Tab::CHAT);
+    _syncActiveChannelToChat();
     _updateMyNodeScreen();
 }
 
@@ -235,6 +194,19 @@ void UITaskRetro::_handleKeys() {
         }
     }
 
+    // Nakladka wyboru typu advertu ma najwyzszy priorytet, gdy otwarta —
+    // dostepna jest z kazdej zakladki po wcisnieciu samego "tab" (bez opt).
+    if (_advert_overlay) {
+        if (ks.up || ks.down) { _advert_sel = 1 - _advert_sel; }
+        if (ks.enter) {
+            _sendAdvert(_advert_sel == 0);
+            _closeAdvertOverlay();
+        } else if (ks.del || ks.backspace || ks.tab) {
+            _closeAdvertOverlay();
+        }
+        return;
+    }
+
     // Nakladka wyboru/dodawania kanalow ma priorytet nad reszta klawiszy
     if (_channel_overlay) {
         bool was_adding = _channels.isAdding();
@@ -243,6 +215,13 @@ void UITaskRetro::_handleKeys() {
         // LISTY (w tej samej nakladce) — nakladke zamykamy dopiero gdy Enter
         // faktycznie wybral kanal z listy.
         if (consumed && ks.enter && !was_adding) _closeChannelOverlay();
+        return;
+    }
+
+    // Sam "tab" (bez opt) — otwiera okienko wyboru wyslania advertu
+    if (ks.tab) {
+        _advert_overlay = true;
+        _advert_sel = 0;
         return;
     }
 
@@ -275,7 +254,13 @@ void UITaskRetro::_drawFrame() {
                  the_mesh.getNumContacts(),
                  getBattMilliVolts(),
                  _gps_fix,
-                 _tx_count, _rx_count, _err_count);
+                 _tx_count, _rx_count, _err_count,
+                 _anyUnreadChannel());
+
+    if (_advert_overlay) {
+        _drawAdvertOverlay();
+        return;
+    }
 
     if (_channel_overlay) {
         _channels.draw();
@@ -299,6 +284,53 @@ void UITaskRetro::_closeChannelOverlay() {
     // dopoki cos innego (np. wpisanie znaku) nie wymusilo redraw.
     M5Cardputer.Display.fillRect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
     _chat.onEnter();
+}
+
+void UITaskRetro::_drawAdvertOverlay() {
+    M5GFX& d = M5Cardputer.Display;
+    d.fillRect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
+    d.setTextSize(FONT_SM);
+
+    static const char* opts[2] = { "Advert (flood)", "Zero-hop (blisko)" };
+
+    d.setTextColor(C_TEXT_MID, C_BG);
+    d.setCursor(4, CONTENT_Y + 6);
+    d.print("Wyslij advertisement:");
+
+    int y = CONTENT_Y + 22;
+    for (int i = 0; i < 2; i++) {
+        bool sel = (i == _advert_sel);
+        if (sel) d.fillRect(0, y, SCREEN_W, LINE_H, C_TEXT);
+        d.setTextColor(sel ? C_BG : C_TEXT_MID, sel ? C_TEXT : C_BG);
+        d.setCursor(4, y);
+        d.print(opts[i]);
+        y += LINE_H;
+    }
+
+    int hy = CONTENT_Y + CONTENT_H - LINE_H;
+    d.drawFastHLine(0, hy - 1, SCREEN_W, C_TEXT_DIM);
+    d.setTextColor(C_TEXT_DIM, C_BG);
+    d.setCursor(2, hy);
+    d.print("Enter=wyslij  Tab/Del=anuluj");
+}
+
+void UITaskRetro::_closeAdvertOverlay() {
+    _advert_overlay = false;
+    // Popup zajmowal cala tresc, wiec po zamknieciu trzeba wymusic pelny
+    // redraw aktywnej zakladki — jej wewnetrzne flagi "trzeba przerysowac"
+    // mogly nie byc ustawione, skoro klawisze szly do nakladki.
+    M5Cardputer.Display.fillRect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
+    switch (_active_tab) {
+        case Tab::CHAT:     _chat.onEnter();     break;
+        case Tab::NODES:    _nodes.onEnter();    break;
+        case Tab::MAP:      _map.onEnter();      break;
+        case Tab::SETTINGS: _settings.onEnter(); break;
+        default: break;
+    }
+}
+
+void UITaskRetro::_sendAdvert(bool flood) {
+    the_mesh.advert(flood);
 }
 
 void UITaskRetro::_switchTab(Tab t) {
@@ -373,10 +405,40 @@ void UITaskRetro::_updateMyNodeScreen() {
     _settings.refreshLiveStats();
 }
 
+void UITaskRetro::_syncActiveChannelToChat() {
+    ChannelDetails ch;
+    if (the_mesh.getChannel(_active_channel, ch) && ch.name[0] != '\0') {
+        _chat.setActiveChannel(_active_channel, ch.name);
+    }
+    // Kanal, ktory wlasnie stal sie aktywny, jest teraz ogladany — jego
+    // ewentualny licznik nieprzeczytanych wraca do zera.
+    if (_active_channel >= 0 && _active_channel < MAX_GROUP_CHANNELS) {
+        _unread_count[_active_channel] = 0;
+    }
+}
+
+bool UITaskRetro::_anyUnreadChannel() const {
+    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+        if (_unread_count[i] > 0) return true;
+    }
+    return false;
+}
+
 void UITaskRetro::newMsg(uint8_t path_len, const char* from_name,
                           const char* text, int msgcount) {
     _rx_count++;
-    _chat.addMessage(from_name, text, false, false);
+    // from_name to nazwa kanalu (patrz MyMesh::onChannelMessageRecv) —
+    // trzeba ja zamapowac na prawdziwy indeks kanalu, zeby wiadomosc trafila
+    // do wlasciwego, oddzielnego widoku, niezaleznie od tego, ktory kanal
+    // jest akurat aktywny na ekranie.
+    int ch_idx = findChannelIndexByName(from_name);
+    _chat.addMessage(from_name, text, false, false, ch_idx);
+    // Wiadomosc przyszla na kanale, ktory nie jest teraz ogladany — zwieksz
+    // jego licznik nieprzeczytanych (pokazywany w nakladce kanalow) i zapal
+    // wykrzyknik obok F1:CZAT, zeby uzytkownik wiedzial, ze cos umknelo.
+    if (ch_idx != _active_channel && ch_idx >= 0 && ch_idx < MAX_GROUP_CHANNELS) {
+        _unread_count[ch_idx]++;
+    }
     _need_refresh = true;
     _wakScreen();
 }
@@ -459,7 +521,10 @@ bool UITaskRetro::_chAdd(const char* name, void* ctx) {
         ChannelDetails ch;
         if (the_mesh.getChannel(i, ch) && ch.name[0] != '\0') last = i;
     }
-    if (last >= 0) self->_active_channel = last;
+    if (last >= 0) {
+        self->_active_channel = last;
+        self->_syncActiveChannelToChat();
+    }
     return true;
 }
 
@@ -479,7 +544,17 @@ int UITaskRetro::_chGetActive(void* ctx) {
 void UITaskRetro::_chSetActive(int idx, void* ctx) {
     UITaskRetro* self = (UITaskRetro*)ctx;
     int real = mapChannelIndex(idx);
-    if (real >= 0) self->_active_channel = real;
+    if (real >= 0) {
+        self->_active_channel = real;
+        self->_syncActiveChannelToChat();
+    }
+}
+
+int UITaskRetro::_chGetUnread(int idx, void* ctx) {
+    UITaskRetro* self = (UITaskRetro*)ctx;
+    int real = mapChannelIndex(idx);
+    if (real < 0 || real >= MAX_GROUP_CHANNELS) return 0;
+    return self->_unread_count[real];
 }
 
 // Static member definitions
