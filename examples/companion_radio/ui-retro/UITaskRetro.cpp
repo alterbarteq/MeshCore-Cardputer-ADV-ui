@@ -50,14 +50,34 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.fillScreen(C_BG);
 
-    // Ekran powitalny — duzy napis "MeshCore" + malutkie "v0.1" pod spodem
+    // Ekran powitalny — napis "MeshCore" jako gradient roznych odcieni
+    // fioletu (litera po literze, jasny liliowy -> ciemny fiolet), jak logo
+    // TORLINK, + malutkie "v0.1" pod spodem
     {
         M5GFX& d = M5Cardputer.Display;
         d.setTextSize(3);
-        d.setTextColor(C_TEXT, C_BG);
-        int tw = d.textWidth("MeshCore");
-        d.setCursor((SCREEN_W - tw) / 2, 48);
-        d.print("MeshCore");
+
+        const char* title = "MeshCore";
+        int n = strlen(title);
+        int tw = d.textWidth(title);
+        int x = (SCREEN_W - tw) / 2;
+        int y = 48;
+
+        // jasny liliowy -> ciemny fiolet/indygo
+        const uint8_t r1=225,g1=180,b1=255;
+        const uint8_t r2=90, g2=50, b2=190;
+
+        for (int i = 0; i < n; i++) {
+            float t = (n > 1) ? (float)i / (n - 1) : 0.0f;
+            uint8_t r = r1 + (int)((r2 - r1) * t);
+            uint8_t g = g1 + (int)((g2 - g1) * t);
+            uint8_t b = b1 + (int)((b2 - b1) * t);
+            char ch[2] = { title[i], '\0' };
+            d.setTextColor(RGB565(r, g, b), C_BG);
+            d.setCursor(x, y);
+            d.print(ch);
+            x += d.textWidth(ch);
+        }
 
         d.setTextSize(1);
         d.setTextColor(C_TEXT_DIM, C_BG);
