@@ -50,6 +50,25 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.fillScreen(C_BG);
 
+    // Ekran powitalny — duzy napis "MeshCore" + malutkie "v0.1" pod spodem
+    {
+        M5GFX& d = M5Cardputer.Display;
+        d.setTextSize(3);
+        d.setTextColor(C_TEXT, C_BG);
+        int tw = d.textWidth("MeshCore");
+        d.setCursor((SCREEN_W - tw) / 2, 48);
+        d.print("MeshCore");
+
+        d.setTextSize(1);
+        d.setTextColor(C_TEXT_DIM, C_BG);
+        int vw = d.textWidth("v0.1");
+        d.setCursor((SCREEN_W - vw) / 2, 80);
+        d.print("v0.1");
+
+        delay(1000);
+        d.fillScreen(C_BG);
+    }
+
     _switchTab(Tab::CHAT);
     _updateMyNodeScreen();
 }
