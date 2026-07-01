@@ -153,6 +153,13 @@ private:
     bool _wifi_attempted = false;
     unsigned long _wifi_connect_start = 0;
 
+    // Give up after a couple of failed fetches instead of hammering the
+    // tile server forever (e.g. this board can't complete a TLS handshake
+    // with too little free heap - see _tryFetchTile()).
+    static const int MAX_FETCH_ATTEMPTS = 2;
+    int  _fetch_attempts = 0;
+    bool _gave_up = false;
+
     // GPS state
     int32_t _own_lat = 0, _own_lon = 0;
     bool    _have_gps = false;
@@ -185,7 +192,7 @@ private:
                 _status = MapStatus::OK;
                 _tile_dirty = true;
             }
-            if (!_tile_ready && !_fetching && _have_gps) _tryFetchTile();
+            if (!_tile_ready && !_fetching && !_gave_up && _have_gps) _tryFetchTile();
         } else if (_status == MapStatus::CONNECTING) {
             if (millis() - _wifi_connect_start > WIFI_CONNECT_TIMEOUT_MS) {
                 Serial.println("[MAP] Timeout laczenia z WiFi");
@@ -200,6 +207,8 @@ private:
     void _invalidateTile() {
         _tile_ready = false;
         _tile_dirty = true;
+        _fetch_attempts = 0;
+        _gave_up = false;
     }
 
     // Convert lat/lon (6-decimal int) + zoom to OSM tile x,y (floor)
@@ -231,6 +240,14 @@ private:
 
     void _tryFetchTile() {
         if (_fetching) return;
+        _fetch_attempts++;
+        if (_fetch_attempts > MAX_FETCH_ATTEMPTS) {
+            Serial.println("[MAP] Rezygnuje po kilku nieudanych probach - patrz log wyzej");
+            _gave_up = true;
+            _status = MapStatus::ERR;
+            _tile_dirty = true;
+            return;
+        }
 
         int tx, ty;
         _latLonToTile(_own_lat, _own_lon, _zoom, tx, ty);
