@@ -2,16 +2,7 @@
 
 #if defined(TBEAM_SUPREME_SX1262) || defined(TBEAM_SX1262) || defined(TBEAM_SX1276)
 
-#include <Wire.h>
-#include <Arduino.h>
-#include "XPowersLib.h"
-#include "helpers/ESP32Board.h"
-#include <driver/rtc_io.h>
-//#include <RadioLib.h>
-//#include <helpers/RadioLibWrappers.h>
-//#include <helpers/CustomSX1262Wrapper.h>
-//#include <helpers/CustomSX1276Wrapper.h>
-
+// Define pin mappings BEFORE including ESP32Board.h so sleep() can use P_LORA_DIO_1
 #ifdef TBEAM_SUPREME_SX1262
   // LoRa radio module pins for TBeam S3 Supreme SX1262
   #define  P_LORA_DIO_0   -1   //NC
@@ -68,13 +59,13 @@
   // uint32_t  P_LORA_BUSY  = 0;   //shared, so define at run
   // uint32_t  P_LORA_DIO_2 = 0;   //SX1276 only, so define at run
 
-  #define  P_LORA_DIO_0  26
-  #define  P_LORA_DIO_1  33
-  #define  P_LORA_NSS    18
-  #define  P_LORA_RESET  23
-  #define  P_LORA_SCLK    5
-  #define  P_LORA_MISO   19
-  #define  P_LORA_MOSI   27
+  // #define  P_LORA_DIO_0  26
+  // #define  P_LORA_DIO_1  33
+  // #define  P_LORA_NSS    18
+  // #define  P_LORA_RESET  23
+  // #define  P_LORA_SCLK    5
+  // #define  P_LORA_MISO   19
+  // #define  P_LORA_MOSI   27
 
   // #define PIN_GPS_RX      34
   // #define PIN_GPS_TX      12
@@ -89,6 +80,13 @@
 //   SX1262, 
 //   SX1276
 // };
+
+// Include headers AFTER pin definitions so ESP32Board::sleep() can use P_LORA_DIO_1
+#include <Wire.h>
+#include <Arduino.h>
+#include "XPowersLib.h"
+#include "helpers/ESP32Board.h"
+#include <driver/rtc_io.h>
 
 class TBeamBoard : public ESP32Board {
 XPowersLibInterface *PMU = NULL;

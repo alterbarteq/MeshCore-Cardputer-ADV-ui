@@ -38,21 +38,76 @@ mesh::Packet* BaseChatMesh::createSelfAdvert(const char* name, double lat, doubl
   return createAdvert(self_id, app_data, app_data_len);
 }
 
-void BaseChatMesh::sendAckTo(const ContactInfo& dest, uint32_t ack_hash) {
-  if (dest.out_path_len < 0) {
-    mesh::Packet* ack = createAck(ack_hash);
+void BaseChatMesh::sendAckTo(const ContactInfo& dest, const uint8_t* ack_hash, uint8_t ack_len) {
+  if (dest.out_path_len == OUT_PATH_UNKNOWN) {
+    mesh::Packet* ack = createAck(ack_hash, ack_len);
     if (ack) sendFloodScoped(dest, ack, TXT_ACK_DELAY);
   } else {
     uint32_t d = TXT_ACK_DELAY;
     if (getExtraAckTransmitCount() > 0) {
-      mesh::Packet* a1 = createMultiAck(ack_hash, 1);
+      mesh::Packet* a1 = createMultiAck(ack_hash, ack_len, 1);
       if (a1) sendDirect(a1, dest.out_path, dest.out_path_len, d);
       d += 300;
     }
 
-    mesh::Packet* a2 = createAck(ack_hash);
+    mesh::Packet* a2 = createAck(ack_hash, ack_len);
     if (a2) sendDirect(a2, dest.out_path, dest.out_path_len, d);
   }
+}
+
+void BaseChatMesh::bootstrapRTCfromContacts() {
+  uint32_t latest = 0;
+  for (int i = 0; i < num_contacts; i++) {
+    if (contacts[i].lastmod > latest) {
+      latest = contacts[i].lastmod;
+    }
+  }
+  if (latest != 0) {
+    getRTCClock()->setCurrentTime(latest + 1);
+  }
+}
+
+ContactInfo* BaseChatMesh::allocateContactSlot(bool transient_only) {
+  if (num_contacts < MAX_CONTACTS) {
+    return &contacts[num_contacts++];
+  } else if (transient_only || shouldOverwriteWhenFull()) {
+    // Find oldest non-favourite contact by oldest lastmod timestamp
+    int oldest_idx = -1;
+    uint32_t oldest_lastmod = 0xFFFFFFFF;
+    for (int i = 0; i < num_contacts; i++) {
+      if (transient_only) {
+        if (contacts[i].type == ADV_TYPE_NONE && contacts[i].lastmod < oldest_lastmod) {
+          oldest_lastmod = contacts[i].lastmod;
+          oldest_idx = i;
+        }
+      } else {
+        bool is_favourite = (contacts[i].flags & 0x01) != 0;
+        if (!is_favourite && contacts[i].lastmod < oldest_lastmod && contacts[i].type != ADV_TYPE_NONE) {
+          oldest_lastmod = contacts[i].lastmod;
+          oldest_idx = i;
+        }
+      }
+    }
+    if (oldest_idx >= 0) {
+      onContactOverwrite(contacts[oldest_idx].id.pub_key);
+      return &contacts[oldest_idx];
+    }
+  }
+  return NULL; // no space, no overwrite or all contacts are all favourites
+}
+
+void BaseChatMesh::populateContactFromAdvert(ContactInfo& ci, const mesh::Identity& id, const AdvertDataParser& parser, uint32_t timestamp) {
+  memset(&ci, 0, sizeof(ci));
+  ci.id = id;
+  ci.out_path_len = OUT_PATH_UNKNOWN;
+  StrHelper::strncpy(ci.name, parser.getName(), sizeof(ci.name));
+  ci.type = parser.getType();
+  if (parser.hasLatLon()) {
+    ci.gps_lat = parser.getIntLat();
+    ci.gps_lon = parser.getIntLon();
+  }
+  ci.last_advert_timestamp = timestamp;
+  ci.lastmod = getRTCClock()->getCurrentTime();
 }
 
 void BaseChatMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32_t timestamp, const uint8_t* app_data, size_t app_data_len) {
@@ -83,45 +138,42 @@ void BaseChatMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, 
     plen = packet->writeTo(temp_buf);
     packet->header = save;
   }
-  putBlobByKey(id.pub_key, PUB_KEY_SIZE, temp_buf, plen);
 
-  bool is_new = false;
+  bool is_new = false; // true = not in contacts[], false = exists in contacts[]
   if (from == NULL) {
-    if (!isAutoAddEnabled()) {
+    if (!shouldAutoAddContactType(parser.getType())) {
       ContactInfo ci;
-      memset(&ci, 0, sizeof(ci));
-      ci.id = id;
-      ci.out_path_len = -1;  // initially out_path is unknown
-      StrHelper::strncpy(ci.name, parser.getName(), sizeof(ci.name));
-      ci.type = parser.getType();
-      if (parser.hasLatLon()) {
-        ci.gps_lat = parser.getIntLat();
-        ci.gps_lon = parser.getIntLon();
-      }
-      ci.last_advert_timestamp = timestamp;
-      ci.lastmod = getRTCClock()->getCurrentTime();
+      populateContactFromAdvert(ci, id, parser, timestamp);
       onDiscoveredContact(ci, true, packet->path_len, packet->path);       // let UI know
       return;
     }
 
-    is_new = true;
-    if (num_contacts < MAX_CONTACTS) {
-      from = &contacts[num_contacts++];
-      from->id = id;
-      from->out_path_len = -1;  // initially out_path is unknown
-      from->gps_lat = 0;   // initially unknown GPS loc
-      from->gps_lon = 0;
-      from->sync_since = 0;
-
-      // only need to calculate the shared_secret once, for better performance
-      self_id.calcSharedSecret(from->shared_secret, id);
-    } else {
-      MESH_DEBUG_PRINTLN("onAdvertRecv: contacts table is full!");
+    // check hop limit for new contacts (0 = no limit, 1 = direct (0 hops), N = up to N-1 hops)
+    uint8_t max_hops = getAutoAddMaxHops();
+    if (max_hops > 0 && packet->getPathHashCount() >= max_hops) {
+      ContactInfo ci;
+      populateContactFromAdvert(ci, id, parser, timestamp);
+      onDiscoveredContact(ci, true, packet->path_len, packet->path);       // let UI know
       return;
     }
+
+    from = allocateContactSlot();
+    if (from == NULL) {
+      ContactInfo ci;
+      populateContactFromAdvert(ci, id, parser, timestamp);
+      onDiscoveredContact(ci, true, packet->path_len, packet->path);
+      onContactsFull();
+      MESH_DEBUG_PRINTLN("onAdvertRecv: unable to allocate contact slot for new contact");
+      return;
+    }
+    
+    populateContactFromAdvert(*from, id, parser, timestamp);
+    from->sync_since = 0;
+    from->shared_secret_valid = false;
   }
 
   // update
+  putBlobByKey(id.pub_key, PUB_KEY_SIZE, temp_buf, plen);
   StrHelper::strncpy(from->name, parser.getName(), sizeof(from->name));
   from->type = parser.getType();
   if (parser.hasLatLon()) {
@@ -147,8 +199,7 @@ int BaseChatMesh::searchPeersByHash(const uint8_t* hash) {
 void BaseChatMesh::getPeerSharedSecret(uint8_t* dest_secret, int peer_idx) {
   int i = matching_peer_indexes[peer_idx];
   if (i >= 0 && i < num_contacts) {
-    // lookup pre-calculated shared_secret
-    memcpy(dest_secret, contacts[i].shared_secret, PUB_KEY_SIZE);
+    memcpy(dest_secret, contacts[i].getSharedSecret(self_id), PUB_KEY_SIZE);
   } else {
     MESH_DEBUG_PRINTLN("getPeerSharedSecret: Invalid peer idx: %d", i);
   }
@@ -175,16 +226,20 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
       from.lastmod = getRTCClock()->getCurrentTime(); // update last heard time
       onMessageRecv(from, packet, timestamp, (const char *) &data[5]);  // let UI know
 
-      uint32_t ack_hash;    // calc truncated hash of the message timestamp + text + sender pub_key, to prove to sender that we got it
-      mesh::Utils::sha256((uint8_t *) &ack_hash, 4, data, 5 + strlen((char *)&data[5]), from.id.pub_key, PUB_KEY_SIZE);
+      int text_len = strlen((char *)&data[5]);
+      uint8_t ack_hash[6];    // calc truncated hash of the message timestamp + text + sender pub_key, to prove to sender that we got it
+      mesh::Utils::sha256(ack_hash, 4, data, 5 + text_len, from.id.pub_key, PUB_KEY_SIZE);
+      // NEW: append (potential) extended attempt byte (to make packethash unique)
+      ack_hash[4] = data[5 + text_len + 1];
+      getRNG()->random(&ack_hash[5], 1);  // make 6th byte random
 
       if (packet->isRouteFlood()) {
         // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the ACK
         mesh::Packet* path = createPathReturn(from.id, secret, packet->path, packet->path_len,
-                                                PAYLOAD_TYPE_ACK, (uint8_t *) &ack_hash, 4);
+                                                PAYLOAD_TYPE_ACK, (uint8_t *) &ack_hash, 6);
         if (path) sendFloodScoped(from, path, TXT_ACK_DELAY);
       } else {
-        sendAckTo(from, ack_hash);
+        sendAckTo(from, ack_hash, 6);
       }
     } else if (flags == TXT_TYPE_CLI_DATA) {
       onCommandDataRecv(from, packet, timestamp, (const char *) &data[5]);  // let UI know
@@ -211,7 +266,7 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
                                                 PAYLOAD_TYPE_ACK, (uint8_t *) &ack_hash, 4);
         if (path) sendFloodScoped(from, path, TXT_ACK_DELAY);
       } else {
-        sendAckTo(from, ack_hash);
+        sendAckTo(from, (uint8_t *) &ack_hash);
       }
     } else {
       MESH_DEBUG_PRINTLN("onPeerDataRecv: unsupported message type: %u", (uint32_t) flags);
@@ -229,7 +284,7 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
       } else {
         mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, from.id, secret, temp_buf, reply_len);
         if (reply) {
-          if (from.out_path_len >= 0) {  // we have an out_path, so send DIRECT
+          if (from.out_path_len != OUT_PATH_UNKNOWN) {  // we have an out_path, so send DIRECT
             sendDirect(reply, from.out_path, from.out_path_len, SERVER_RESPONSE_DELAY);
           } else {
             sendFloodScoped(from, reply, SERVER_RESPONSE_DELAY);
@@ -239,7 +294,7 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
     }
   } else if (type == PAYLOAD_TYPE_RESPONSE && len > 0) {
     onContactResponse(from, data, len);
-    if (packet->isRouteFlood() && from.out_path_len >= 0) {
+    if (packet->isRouteFlood() && from.out_path_len != OUT_PATH_UNKNOWN) {
       // we have direct path, but other node is still sending flood response, so maybe they didn't receive reciprocal path properly(?)
       handleReturnPathRetry(from, packet->path, packet->path_len);
     }
@@ -261,7 +316,7 @@ bool BaseChatMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const ui
 bool BaseChatMesh::onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) {
   // NOTE: default impl, we just replace the current 'out_path' regardless, whenever sender sends us a new out_path.
   // FUTURE: could store multiple out_paths per contact, and try to find which is the 'best'(?)
-  memcpy(from.out_path, out_path, from.out_path_len = out_path_len);  // store a copy of path, for sendDirect()
+  from.out_path_len = mesh::Packet::copyPath(from.out_path, out_path, out_path_len);  // store a copy of path, for sendDirect()
   from.lastmod = getRTCClock()->getCurrentTime();
 
   onContactPathUpdated(from);
@@ -283,7 +338,7 @@ void BaseChatMesh::onAckRecv(mesh::Packet* packet, uint32_t ack_crc) {
     txt_send_timeout = 0;   // matched one we're waiting for, cancel timeout timer
     packet->markDoNotRetransmit();   // ACK was for this node, so don't retransmit
 
-    if (packet->isRouteFlood() && from->out_path_len >= 0) {
+    if (packet->isRouteFlood() && from->out_path_len != OUT_PATH_UNKNOWN) {
       // we have direct path, but other node is still sending flood, so maybe they didn't receive reciprocal path properly(?)
       handleReturnPathRetry(*from, packet->path, packet->path_len);
     }
@@ -293,7 +348,7 @@ void BaseChatMesh::onAckRecv(mesh::Packet* packet, uint32_t ack_crc) {
 void BaseChatMesh::handleReturnPathRetry(const ContactInfo& contact, const uint8_t* path, uint8_t path_len) {
   // NOTE: simplest impl is just to re-send a reciprocal return path to sender (DIRECTLY)
   //        override this method in various firmwares, if there's a better strategy
-  mesh::Packet* rpath = createPathReturn(contact.id, contact.shared_secret, path, path_len, 0, NULL, 0);
+  mesh::Packet* rpath = createPathReturn(contact.id, contact.getSharedSecret(self_id), path, path_len, 0, NULL, 0);
   if (rpath) sendDirect(rpath, contact.out_path, contact.out_path_len, 3000);   // 3 second delay
 }
 
@@ -310,8 +365,18 @@ int BaseChatMesh::searchChannelsByHash(const uint8_t* hash, mesh::GroupChannel d
 #endif
 
 void BaseChatMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::GroupChannel& channel, uint8_t* data, size_t len) {
-  uint8_t txt_type = data[4];
-  if (type == PAYLOAD_TYPE_GRP_TXT && len > 5 && (txt_type >> 2) == 0) {  // 0 = plain text msg
+  if (type == PAYLOAD_TYPE_GRP_TXT) {
+    if (len < 5) {
+      MESH_DEBUG_PRINTLN("onGroupDataRecv: dropping short group text payload len=%d", (uint32_t)len);
+      return;
+    }
+
+    uint8_t txt_type = data[4];
+    if ((txt_type >> 2) != 0) {
+      MESH_DEBUG_PRINTLN("onGroupDataRecv: dropping unsupported group text type=%d", (uint32_t)txt_type);
+      return;
+    }
+
     uint32_t timestamp;
     memcpy(&timestamp, data, 4);
 
@@ -320,6 +385,23 @@ void BaseChatMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mes
 
     // notify UI  of this new message
     onChannelMessageRecv(channel, packet, timestamp, (const char *) &data[5]);  // let UI know
+  } else if (type == PAYLOAD_TYPE_GRP_DATA) {
+    if (len < 3) {
+      MESH_DEBUG_PRINTLN("onGroupDataRecv: dropping short group data payload len=%d", (uint32_t)len);
+      return;
+    }
+
+    uint16_t data_type = ((uint16_t)data[0]) | (((uint16_t)data[1]) << 8);
+    uint8_t data_len = data[2];
+    size_t available_len = len - 3;
+
+    if (data_len > available_len) {
+      MESH_DEBUG_PRINTLN("onGroupDataRecv: dropping malformed group data type=%d len=%d available=%d",
+                         (uint32_t)data_type, (uint32_t)data_len, (uint32_t)available_len);
+      return;
+    }
+
+    onChannelDataRecv(channel, packet, data_type, &data[3], data_len);
   }
 }
 
@@ -342,7 +424,7 @@ mesh::Packet* BaseChatMesh::composeMsgPacket(const ContactInfo& recipient, uint3
     temp[len++] = attempt;  // hide attempt number at tail end of payload
   }
 
-  return createDatagram(PAYLOAD_TYPE_TXT_MSG, recipient.id, recipient.shared_secret, temp, len);
+  return createDatagram(PAYLOAD_TYPE_TXT_MSG, recipient.id, recipient.getSharedSecret(self_id), temp, len);
 }
 
 int  BaseChatMesh::sendMessage(const ContactInfo& recipient, uint32_t timestamp, uint8_t attempt, const char* text, uint32_t& expected_ack, uint32_t& est_timeout) {
@@ -352,7 +434,7 @@ int  BaseChatMesh::sendMessage(const ContactInfo& recipient, uint32_t timestamp,
   uint32_t t = _radio->getEstAirtimeFor(pkt->getRawLength());
 
   int rc;
-  if (recipient.out_path_len < 0) {
+  if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
     sendFloodScoped(recipient, pkt);
     txt_send_timeout = futureMillis(est_timeout = calcFloodTimeoutMillisFor(t));
     rc = MSG_SEND_SENT_FLOOD;
@@ -373,12 +455,12 @@ int  BaseChatMesh::sendCommandData(const ContactInfo& recipient, uint32_t timest
   temp[4] = (attempt & 3) | (TXT_TYPE_CLI_DATA << 2);
   memcpy(&temp[5], text, text_len + 1);
 
-  auto pkt = createDatagram(PAYLOAD_TYPE_TXT_MSG, recipient.id, recipient.shared_secret, temp, 5 + text_len);
+  auto pkt = createDatagram(PAYLOAD_TYPE_TXT_MSG, recipient.id, recipient.getSharedSecret(self_id), temp, 5 + text_len);
   if (pkt == NULL) return MSG_SEND_FAILED;
 
   uint32_t t = _radio->getEstAirtimeFor(pkt->getRawLength());
   int rc;
-  if (recipient.out_path_len < 0) {
+  if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
     sendFloodScoped(recipient, pkt);
     txt_send_timeout = futureMillis(est_timeout = calcFloodTimeoutMillisFor(t));
     rc = MSG_SEND_SENT_FLOOD;
@@ -409,6 +491,37 @@ bool BaseChatMesh::sendGroupMessage(uint32_t timestamp, mesh::GroupChannel& chan
     return true;
   }
   return false;
+}
+
+bool BaseChatMesh::sendGroupData(mesh::GroupChannel& channel, uint8_t* path, uint8_t path_len, uint16_t data_type, const uint8_t* data, int data_len) {
+  if (data_len < 0) {
+    MESH_DEBUG_PRINTLN("sendGroupData: invalid negative data_len=%d", data_len);
+    return false;
+  }
+  if (data_len > MAX_GROUP_DATA_LENGTH) {
+    MESH_DEBUG_PRINTLN("sendGroupData: data_len=%d exceeds max=%d", data_len, MAX_GROUP_DATA_LENGTH);
+    return false;
+  }
+
+  uint8_t temp[3 + MAX_GROUP_DATA_LENGTH];
+  temp[0] = (uint8_t)(data_type & 0xFF);
+  temp[1] = (uint8_t)(data_type >> 8);
+  temp[2] = (uint8_t)data_len;
+  if (data_len > 0) memcpy(&temp[3], data, data_len);
+
+  auto pkt = createGroupDatagram(PAYLOAD_TYPE_GRP_DATA, channel, temp, 3 + data_len);
+  if (pkt == NULL) {
+    MESH_DEBUG_PRINTLN("sendGroupData: unable to create group datagram, data_len=%d", data_len);
+    return false;
+  }
+
+  if (path_len == OUT_PATH_UNKNOWN) {
+    sendFloodScoped(channel, pkt);
+  } else {
+    sendDirect(pkt, path, path_len);
+  }
+
+  return true;
 }
 
 bool BaseChatMesh::shareContactZeroHop(const ContactInfo& contact) {
@@ -462,11 +575,36 @@ int BaseChatMesh::sendLogin(const ContactInfo& recipient, const char* password, 
       tlen = 4 + len;
     }
 
-    pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, recipient.id, recipient.shared_secret, temp, tlen);
+    pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, recipient.id, recipient.getSharedSecret(self_id), temp, tlen);
   }
   if (pkt) {
     uint32_t t = _radio->getEstAirtimeFor(pkt->getRawLength());
-    if (recipient.out_path_len < 0) {
+    if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
+      sendFloodScoped(recipient, pkt);
+      est_timeout = calcFloodTimeoutMillisFor(t);
+      return MSG_SEND_SENT_FLOOD;
+    } else {
+      sendDirect(pkt, recipient.out_path, recipient.out_path_len);
+      est_timeout = calcDirectTimeoutMillisFor(t, recipient.out_path_len);
+      return MSG_SEND_SENT_DIRECT;
+    }
+  }
+  return MSG_SEND_FAILED;
+}
+
+int BaseChatMesh::sendAnonReq(const ContactInfo& recipient, const uint8_t* data, uint8_t len, uint32_t& tag, uint32_t& est_timeout) {
+  mesh::Packet* pkt;
+  {
+    uint8_t temp[MAX_PACKET_PAYLOAD];
+    tag = getRTCClock()->getCurrentTimeUnique();
+    memcpy(temp, &tag, 4);   // tag to match later (also extra blob to help make packet_hash unique)
+    memcpy(&temp[4], data, len);
+
+    pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, recipient.id, recipient.getSharedSecret(self_id), temp, 4 + len);
+  }
+  if (pkt) {
+    uint32_t t = _radio->getEstAirtimeFor(pkt->getRawLength());
+    if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
       sendFloodScoped(recipient, pkt);
       est_timeout = calcFloodTimeoutMillisFor(t);
       return MSG_SEND_SENT_FLOOD;
@@ -489,11 +627,11 @@ int  BaseChatMesh::sendRequest(const ContactInfo& recipient, const uint8_t* req_
     memcpy(temp, &tag, 4);   // mostly an extra blob to help make packet_hash unique
     memcpy(&temp[4], req_data, data_len);
 
-    pkt = createDatagram(PAYLOAD_TYPE_REQ, recipient.id, recipient.shared_secret, temp, 4 + data_len);
+    pkt = createDatagram(PAYLOAD_TYPE_REQ, recipient.id, recipient.getSharedSecret(self_id), temp, 4 + data_len);
   }
   if (pkt) {
     uint32_t t = _radio->getEstAirtimeFor(pkt->getRawLength());
-    if (recipient.out_path_len < 0) {
+    if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
       sendFloodScoped(recipient, pkt);
       est_timeout = calcFloodTimeoutMillisFor(t);
       return MSG_SEND_SENT_FLOOD;
@@ -516,11 +654,11 @@ int  BaseChatMesh::sendRequest(const ContactInfo& recipient, uint8_t req_type, u
     memset(&temp[5], 0, 4);  // reserved (possibly for 'since' param)
     getRNG()->random(&temp[9], 4);   // random blob to help make packet-hash unique
 
-    pkt = createDatagram(PAYLOAD_TYPE_REQ, recipient.id, recipient.shared_secret, temp, sizeof(temp));
+    pkt = createDatagram(PAYLOAD_TYPE_REQ, recipient.id, recipient.getSharedSecret(self_id), temp, sizeof(temp));
   }
   if (pkt) {
     uint32_t t = _radio->getEstAirtimeFor(pkt->getRawLength());
-    if (recipient.out_path_len < 0) {
+    if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
       sendFloodScoped(recipient, pkt);
       est_timeout = calcFloodTimeoutMillisFor(t);
       return MSG_SEND_SENT_FLOOD;
@@ -624,7 +762,7 @@ void BaseChatMesh::checkConnections() {
         MESH_DEBUG_PRINTLN("checkConnections(): Keep_alive contact not found!");
         continue;
       }
-      if (contact->out_path_len < 0) {
+      if (contact->out_path_len == OUT_PATH_UNKNOWN) {
         MESH_DEBUG_PRINTLN("checkConnections(): Keep_alive contact, no out_path!");
         continue;
       }
@@ -639,7 +777,7 @@ void BaseChatMesh::checkConnections() {
       // calc expected ACK reply
       mesh::Utils::sha256((uint8_t *)&connections[i].expected_ack, 4, data, 9, self_id.pub_key, PUB_KEY_SIZE);
 
-      auto pkt = createDatagram(PAYLOAD_TYPE_REQ, contact->id, contact->shared_secret, data, 9);
+      auto pkt = createDatagram(PAYLOAD_TYPE_REQ, contact->id, contact->getSharedSecret(self_id), data, 9);
       if (pkt) {
         sendDirect(pkt, contact->out_path, contact->out_path_len);
       }
@@ -651,7 +789,7 @@ void BaseChatMesh::checkConnections() {
 }
 
 void BaseChatMesh::resetPathTo(ContactInfo& recipient) {
-  recipient.out_path_len = -1;
+  recipient.out_path_len = OUT_PATH_UNKNOWN;
 }
 
 static ContactInfo* table;  // pass via global :-(
@@ -699,13 +837,10 @@ ContactInfo* BaseChatMesh::lookupContactByPubKey(const uint8_t* pub_key, int pre
 }
 
 bool BaseChatMesh::addContact(const ContactInfo& contact) {
-  if (num_contacts < MAX_CONTACTS) {
-    auto dest = &contacts[num_contacts++];
+  ContactInfo* dest = allocateContactSlot(contact.type == ADV_TYPE_NONE);
+  if (dest) {
     *dest = contact;
-
-    // calc the ECDH shared secret (just once for performance)
-    self_id.calcSharedSecret(dest->shared_secret, contact.id);
-
+    dest->shared_secret_valid = false; // mark shared_secret as needing calculation
     return true;  // success
   }
   return false;

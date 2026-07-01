@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
+#include <math.h>
 
 #define MAX_HASH_SIZE        8
 #define PUB_KEY_SIZE        32
@@ -16,6 +18,7 @@
 #define PATH_HASH_SIZE       1
 
 #define MAX_PACKET_PAYLOAD  184
+#define MAX_GROUP_DATA_LENGTH  (MAX_PACKET_PAYLOAD - CIPHER_BLOCK_SIZE - 3)
 #define MAX_PATH_SIZE        64
 #define MAX_TRANS_UNIT      255
 
@@ -42,6 +45,7 @@ namespace mesh {
 class MainBoard {
 public:
   virtual uint16_t getBattMilliVolts() = 0;
+  virtual float getMCUTemperature() { return NAN; }
   virtual bool setAdcMultiplier(float multiplier) { return false; };
   virtual float getAdcMultiplier() const { return 0.0f; }
   virtual const char* getManufacturerName() const = 0;
@@ -49,10 +53,25 @@ public:
   virtual void onAfterTransmit() { }
   virtual void reboot() = 0;
   virtual void powerOff() { /* no op */ }
+  // Called by example setup() functions to signal that boot is complete.
+  // Boards may override to stop a boot-indicator LED sequence or similar.
+  // Default no-op: boards that don't care need not implement anything.
+  virtual void onBootComplete() { /* no op */ }
+  virtual uint32_t getIRQGpio() { return -1; } // not supported. Returns DIO1 (SX1262) and DIO0 (SX127x)
+  virtual void sleep(uint32_t secs)  { /* no op */ }
   virtual uint32_t getGpio() { return 0; }
   virtual void setGpio(uint32_t values) {}
   virtual uint8_t getStartupReason() const = 0;
+  virtual bool getBootloaderVersion(char* version, size_t max_len) { return false; }
   virtual bool startOTAUpdate(const char* id, char reply[]) { return false; }   // not supported
+
+  // Power management interface (boards with power management override these)
+  virtual bool isExternalPowered() { return false; }
+  virtual uint16_t getBootVoltage() { return 0; }
+  virtual uint32_t getResetReason() const { return 0; }
+  virtual const char* getResetReasonString(uint32_t reason) { return "Not available"; }
+  virtual uint8_t getShutdownReason() const { return 0; }
+  virtual const char* getShutdownReasonString(uint8_t reason) { return "Not available"; }
 };
 
 /**

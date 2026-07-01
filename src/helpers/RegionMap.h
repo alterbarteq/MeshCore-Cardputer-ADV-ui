@@ -16,11 +16,13 @@ struct RegionEntry {
   uint16_t parent;
   uint8_t flags;
   char name[31];
+
+  bool isWildcard() const { return id == 0; }
 };
 
 class RegionMap {
   TransportKeyStore* _store;
-  uint16_t next_id, home_id;
+  uint16_t next_id, home_id, default_id;
   uint16_t num_regions;
   RegionEntry regions[MAX_REGION_ENTRIES];
   RegionEntry wildcard;
@@ -30,10 +32,10 @@ class RegionMap {
 public:
   RegionMap(TransportKeyStore& store);
 
-  static bool is_name_char(char c);
+  static bool is_name_char(uint8_t c);
 
-  bool load(FILESYSTEM* _fs);
-  bool save(FILESYSTEM* _fs);
+  bool load(FILESYSTEM* _fs, const char* path=NULL);
+  bool save(FILESYSTEM* _fs, const char* path=NULL);
 
   RegionEntry* putRegion(const char* name, uint16_t parent_id, uint16_t id = 0);
   RegionEntry* findMatch(mesh::Packet* packet, uint8_t mask);
@@ -43,10 +45,18 @@ public:
   RegionEntry* findById(uint16_t id);
   RegionEntry* getHomeRegion();   // NOTE: can be NULL
   void setHomeRegion(const RegionEntry* home);
+  RegionEntry* getDefaultRegion();   // NOTE: can be NULL
+  void setDefaultRegion(const RegionEntry* def);
   bool removeRegion(const RegionEntry& region);
   bool clear();
   void resetFrom(const RegionMap& src) { num_regions = 0; next_id = src.next_id; }
   int getCount() const { return num_regions; }
+  const RegionEntry* getByIdx(int i) const { return &regions[i]; }
+  const RegionEntry* getRoot() const { return &wildcard; }
+  int exportNamesTo(char *dest, int max_len, uint8_t mask, bool invert = false);
+  int getTransportKeysFor(const RegionEntry& src, TransportKey dest[], int max_num);
 
-  void exportTo(Stream& out) const;
+  void    exportTo(Stream& out) const;
+  size_t  exportTo(char *dest, size_t max_len) const;
+ 
 };
