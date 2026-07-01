@@ -40,6 +40,9 @@ public:
 extern M5CardputerBoard board;
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
+// Magistrala SPI dzielona z radiem LoRa (ta sama fizyczna SCK/MISO/MOSI na
+// tej plytce) — SD musi jej uzywac zamiast osobnej instancji, patrz SDCard.h.
+extern SPIClass spi;
 #ifdef HAS_GPS
 extern CardputerSensorManager sensors;
 #else

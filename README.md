@@ -87,6 +87,8 @@ First-time configuration requires the MeshCore mobile app:
 - Built on [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh networking firmware.
 - Original Cardputer ADV / Cap LoRa-1262 groundwork by [Stachugit/MeshCore-Cardputer-ADV](https://github.com/Stachugit/MeshCore-Cardputer-ADV) (Stanisław "Stachu" Piskorski) — support at [buymeacoffee.com/Stachu](https://buymeacoffee.com/Stachu).
 - Cap LoRa-1262 compatibility fixes based on work by [sosprz](https://github.com/sosprz/meshcore-cardputer-adv).
+- The SD-card offline map tile downloader (`tools/download_osm_tiles.py`) is adapted from [d4rkmen/plai](https://github.com/d4rkmen/plai) (GPL-3.0).
+- SD-card emoji assets (`assets/sd_emoji/`) are [Google Noto Color Emoji](https://github.com/googlefonts/noto-emoji) (SIL OFL 1.1), sourced pre-processed from d4rkmen/plai.
 - Retro terminal UI (`ui-retro`) is this fork's own addition on top of the above.
 
 ## License

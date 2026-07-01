@@ -1,5 +1,6 @@
 #pragma once
 #include "ScreenBase.h"
+#include "SDCard.h"
 #include <Arduino.h>
 #include <string.h>
 
@@ -8,6 +9,8 @@
 #define CHAT_FROM_LEN   20
 #define CHAT_CHANNEL_LEN 24
 #define INPUT_MAX_LEN  100
+#define CHAT_MAX_EMOJI   8   // odrebnych emoji na jedna wiadomosc
+#define EMOJI_CACHE_CAP  8   // ile ostatnio narysowanych emoji trzymamy w RAM
 
 #define COMPOSE_BAR_H  10
 #define CHAT_HDR_H     LINE_H   // pasek z nazwa kanalu, rysowany raz na gorze
@@ -16,10 +19,20 @@
 #define MSG_TOP       (CONTENT_Y + CHAT_HDR_H)
 #define TYPEWRITER_MS  20   // ms na znak
 
-// Transliteracja polskich znakow UTF-8 na ASCII
-static void depolish(const char* src, char* dst, int dst_len) {
+// Transliteracja polskich znakow UTF-8 na ASCII + wykrywanie emoji.
+//
+// Emoji (3- lub 4-bajtowe sekwencje UTF-8 spoza polskich znakow powyzej) nie
+// sa tlumaczone na '?' jak reszta nieznanych znakow — zamiast tego ich pelny
+// kodpunkt trafia do emoji_cp[] (jesli podano), a w samym tekscie zostaje
+// jeden bajt-znacznik 0x01..CHAT_MAX_EMOJI wskazujacy slot w tej tablicy.
+// Dzieki temu caly istniejacy kod zawijania/liczenia linii (ktory operuje
+// na bajtach 1:1 z kolumnami ekranu) dziala bez zmian — tylko _drawLine()
+// wie, ze bajt <= emoji_count oznacza "narysuj obrazek", nie znak.
+static void depolish(const char* src, char* dst, int dst_len,
+                     uint32_t* emoji_cp = nullptr, uint8_t* emoji_count = nullptr) {
     int si = 0, di = 0;
     int slen = strlen(src);
+    if (emoji_count) *emoji_count = 0;
     while (src[si] && di < dst_len - 1) {
         unsigned char c = (unsigned char)src[si];
         if (c == 0xC4 && si+1 < slen) {
@@ -58,11 +71,75 @@ static void depolish(const char* src, char* dst, int dst_len) {
                 default:   dst[di++]='?'; break;
             }
             si += 2;
+        } else if ((c & 0xF0) == 0xE0 && si+2 < slen) {
+            // 3-bajtowa sekwencja UTF-8 (np. symbole ☀♥ w U+2000-U+2FFF)
+            unsigned char c2 = (unsigned char)src[si+1], c3 = (unsigned char)src[si+2];
+            uint32_t cp = ((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+            si += 3;
+            if (emoji_cp && emoji_count && *emoji_count < CHAT_MAX_EMOJI) {
+                emoji_cp[*emoji_count] = cp;
+                dst[di++] = (char)(1 + *emoji_count);
+                (*emoji_count)++;
+            } else {
+                dst[di++] = '?';
+            }
+        } else if ((c & 0xF8) == 0xF0 && si+3 < slen) {
+            // 4-bajtowa sekwencja UTF-8 — wiekszosc prawdziwych emoji (np. 😀🎉)
+            unsigned char c2 = (unsigned char)src[si+1], c3 = (unsigned char)src[si+2], c4 = (unsigned char)src[si+3];
+            uint32_t cp = ((c & 0x07) << 18) | ((c2 & 0x3F) << 12) | ((c3 & 0x3F) << 6) | (c4 & 0x3F);
+            si += 4;
+            if (emoji_cp && emoji_count && *emoji_count < CHAT_MAX_EMOJI) {
+                emoji_cp[*emoji_count] = cp;
+                dst[di++] = (char)(1 + *emoji_count);
+                (*emoji_count)++;
+            } else {
+                dst[di++] = '?';
+            }
         } else {
             dst[di++] = src[si++];
         }
     }
     dst[di] = '\0';
+}
+
+// Cache ostatnio wczytanych z SD obrazkow emoji (surowe bajty PNG), zeby
+// przewijanie/przerysowanie czatu nie odczytywalo tego samego pliku z karty
+// przy kazdej klatce.
+struct EmojiCacheEntry { uint32_t code = 0; uint8_t* data = nullptr; uint32_t len = 0; };
+static EmojiCacheEntry s_emoji_cache[EMOJI_CACHE_CAP];
+static uint8_t s_emoji_cache_n = 0;
+
+static EmojiCacheEntry* emojiCacheLookup(uint32_t code) {
+    for (uint8_t i = 0; i < s_emoji_cache_n; i++)
+        if (s_emoji_cache[i].code == code) return &s_emoji_cache[i];
+
+    EmojiCacheEntry entry;
+    entry.code = code;
+    if (ensureSDCard()) {
+        char path[24];
+        snprintf(path, sizeof(path), "/emoji/u%lX.png", (unsigned long)code);
+        File f = SD.open(path, FILE_READ);
+        if (f) {
+            int len = f.size();
+            if (len > 0 && len < 8192) {
+                uint8_t* buf = (uint8_t*)malloc(len);
+                if (buf) {
+                    if (f.read(buf, len) == len) { entry.data = buf; entry.len = len; }
+                    else free(buf);
+                }
+            }
+            f.close();
+        }
+    }
+
+    if (s_emoji_cache_n < EMOJI_CACHE_CAP) {
+        s_emoji_cache[s_emoji_cache_n++] = entry;
+    } else {
+        free(s_emoji_cache[0].data);
+        memmove(&s_emoji_cache[0], &s_emoji_cache[1], sizeof(s_emoji_cache[0]) * (EMOJI_CACHE_CAP - 1));
+        s_emoji_cache[EMOJI_CACHE_CAP - 1] = entry;
+    }
+    return &s_emoji_cache[s_emoji_cache_n - 1];
 }
 
 struct ChatMsg {
@@ -73,6 +150,8 @@ struct ChatMsg {
     int  channel_idx;   // prawdziwy indeks kanalu mesh, do ktorego nalezy
     int  typed_chars;   // ile znakow juz wpisano (typewriter)
     bool typing_done;   // czy animacja skonczona
+    uint32_t emoji_cp[CHAT_MAX_EMOJI];   // kodpunkty emoji uzyte w text (patrz depolish)
+    uint8_t  emoji_count;
 };
 
 class ScreenChat : public ScreenBase {
@@ -151,7 +230,7 @@ public:
         }
 
         depolish(sender, _msgs[idx].from, CHAT_FROM_LEN);
-        depolish(body, _msgs[idx].text, CHAT_MSG_LEN);
+        depolish(body, _msgs[idx].text, CHAT_MSG_LEN, _msgs[idx].emoji_cp, &_msgs[idx].emoji_count);
         _msgs[idx].outgoing    = outgoing;
         _msgs[idx].is_channel  = is_channel;
         _msgs[idx].channel_idx = channel_idx;
@@ -226,7 +305,8 @@ public:
                         _drawLine(d, m.from, txt_src, m.outgoing, sl,
                                   offsets[sl], counts[sl], y,
                                   // kursor: ostatnia linia ostatniej wiadomosci (tego kanalu) w trakcie pisania
-                                  (i == last_idx && !m.typing_done && sl == nl-1));
+                                  (i == last_idx && !m.typing_done && sl == nl-1),
+                                  m.emoji_cp, m.emoji_count);
                         y += LINE_H;
                     }
                     line++;
@@ -399,7 +479,7 @@ private:
 
     void _drawLine(M5GFX& d, const char* from, const char* txt,
                    bool outgoing, int sl, int offset, int count, int y,
-                   bool show_cursor) {
+                   bool show_cursor, const uint32_t* emoji_cp, uint8_t emoji_count) {
         char buf[CHAT_MSG_LEN + 4];
         strncpy(buf, txt + offset, count); buf[count] = '\0';
         int char_w = d.textWidth("A");
@@ -409,36 +489,72 @@ private:
         strncpy(fname, from, 9); fname[9] = '\0';
         int header_len = strlen(fname) + 1; // "Nazwa:" szerokosc w znakach
 
+        int x;
         if (outgoing) {
             // Wlasne wiadomosci — dosuniete do prawej krawedzi, nazwa
             // uzytkownika (C_ACCENT) wyroznia je od cudzych.
             int line_chars = count + (sl == 0 ? header_len : 0);
-            int x = max(0, SCREEN_W - line_chars * char_w - 2);
+            x = max(0, SCREEN_W - line_chars * char_w - 2);
             d.setCursor(x, y);
             if (sl == 0) {
                 d.setTextColor(C_ACCENT, C_BG);
                 d.print(fname); d.print(":");
+                x = d.getCursorX();
             }
             d.setTextColor(C_TEXT, C_BG);
-            d.print(buf);
         } else {
             // Cudze wiadomosci — lewa krawedz, nazwa nadawcy (C_WARN) wyroznia
             // kto pisze.
-            d.setCursor(2, y);
+            x = 2;
+            d.setCursor(x, y);
             if (sl == 0) {
                 d.setTextColor(C_WARN, C_BG);
                 d.print(fname); d.print(":");
             } else {
                 for (int i = 0; i < header_len; i++) d.print(" ");
             }
+            x = d.getCursorX();
             d.setTextColor(C_TEXT, C_BG);
-            d.print(buf);
+        }
+
+        // Rysuj tresc znak po znaku (nie jednym d.print(buf)), zeby w
+        // dowolnym miejscu podmienic bajt-znacznik emoji (patrz depolish) na
+        // maly obrazek z karty SD zamiast litery.
+        d.setCursor(x, y);
+        for (int i = 0; i < count; i++) {
+            unsigned char c = (unsigned char)buf[i];
+            if (c >= 1 && c <= emoji_count) {
+                _drawEmoji(d, x, y, emoji_cp[c - 1], char_w, LINE_H - 1);
+                x += char_w;
+                d.setCursor(x, y);
+            } else {
+                d.print((char)c);
+                x = d.getCursorX();
+            }
         }
 
         // Kursor typewriter (migajacy blok)
         if (show_cursor && (millis() / 300) % 2 == 0) {
             int cx = d.getCursorX();
             d.fillRect(cx, y, char_w, LINE_H - 1, C_TEXT);
+        }
+    }
+
+    // Rysuje jedno emoji przeskalowane do komorki znaku (w x h), z cache — a
+    // jesli plik nie istnieje na karcie (albo karty w ogole nie ma), pokazuje
+    // zwykly znak zapytania zamiast zostawiac dziure.
+    void _drawEmoji(M5GFX& d, int x, int y, uint32_t code, int w, int h) {
+        EmojiCacheEntry* e = emojiCacheLookup(code);
+        if (e->data) {
+            // Nasze emoji sa 12x12 px — skaluj do MNIEJSZEGO z wymiarow
+            // komorki znaku, zeby obrazek nie zachodzil na sasiedni znak
+            // (kolumny tekstu maja tylko char_w=6px, wiersz 8px).
+            float scale = (float)min(w, h) / 12.0f;
+            d.drawPng(e->data, e->len, x, y, w, h, 0, 0, scale, scale);
+        } else {
+            d.setTextColor(C_TEXT_DIM, C_BG);
+            d.setCursor(x, y);
+            d.print('?');
         }
     }
 

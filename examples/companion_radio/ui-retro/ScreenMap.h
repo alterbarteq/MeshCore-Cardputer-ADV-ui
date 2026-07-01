@@ -1,7 +1,7 @@
 #pragma once
 #include "ScreenBase.h"
 #include "ScreenNodes.h"
-#include <SD.h>
+#include "SDCard.h"
 #include <M5Cardputer.h>
 #include <math.h>
 
@@ -26,7 +26,6 @@
 #define DOT_SELF       4
 #define DOT_NODE       3
 #define TILE_MAX_BYTES 60000    // sane upper bound for a compressed street tile
-#define SD_SPI_HZ      25000000
 
 enum class MapStatus { NO_SD, NOT_FOUND, OK, ERR, NO_GPS };
 
@@ -58,11 +57,12 @@ public:
 
     void onEnter() override {
         _need_redraw = true;
-        // SD.begin() jest tymczasowo wylaczone: przy karcie zglaszajacej
-        // problemy komunikacyjne ("no token received") potrafilo zablokowac
-        // cala petle glowna na dlugo (stad zawieszona klawiatura i "znikajacy"
-        // GPS - nic sie po prostu nie odswiezalo). Do wlaczenia z powrotem
-        // (_ensureSD();) po ogarnieciu karty/okablowania SD.
+        // Poprzednie zawieszenie (2026-07-01) mialo inna przyczyne niz karta
+        // sama w sobie: SD.begin() nigdy nie mial ustawionych realnych pinow
+        // SPI (patrz SD_SPI_*_PIN wyzej), wiec czekal w nieskonczonosc na
+        // odpowiedz z karty na "wiszacej" magistrali. Teraz SPI.begin()
+        // konfiguruje piny przed montowaniem.
+        _ensureSD();
     }
 
     void onLeave() override {}
@@ -156,17 +156,8 @@ private:
     void _ensureSD() {
         if (_sd_ready || _sd_attempted) return;
         _sd_attempted = true;
-#ifdef PIN_SD_CS
-        if (SD.begin(PIN_SD_CS, SPI, SD_SPI_HZ)) {
-            _sd_ready = true;
-            Serial.println("[MAP] Karta SD zamontowana");
-        } else {
-            Serial.println("[MAP] Nie udalo sie zamontowac karty SD");
-            _status = MapStatus::NO_SD;
-        }
-#else
-        Serial.println("[MAP] PIN_SD_CS nie zdefiniowany dla tego wariantu plytki");
-#endif
+        _sd_ready = ensureSDCard();
+        if (!_sd_ready) _status = MapStatus::NO_SD;
         _tile_dirty = true;
     }
 

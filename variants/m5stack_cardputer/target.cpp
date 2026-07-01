@@ -3,7 +3,13 @@
 
 M5CardputerBoard board;
 
-static SPIClass spi;
+// Nie 'static' — SD (ScreenMap/ScreenChat, patrz SDCard.h) musi uzywac tej
+// samej magistrali/instancji co radio, bo obie na tej plytce fizycznie dziela
+// te same piny SCK/MISO/MOSI (tylko CS je rozroznia). Osobny SPIClass na
+// tych samych pinach to dwa sprzetowe peryferia sterujace ta sama linia
+// jednoczesnie — mesh przestawal wysylac/odbierac wiadomosci po chwili od
+// wlaczenia SD, dopoki to nie zostalo naprawione (2026-07-01).
+SPIClass spi;
 RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, spi, SPISettings());
 
 // RF switch control pins (only for modules with external RF switch like DX-LR30)
