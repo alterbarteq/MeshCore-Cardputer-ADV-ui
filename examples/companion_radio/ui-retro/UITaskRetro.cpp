@@ -46,30 +46,6 @@ static void drawTileGlyph(M5GFX& d, int x, int y, const uint8_t* glyph,
     }
 }
 
-// Rysuje jedno slowo wysrodkowane poziomo, litera po literze w gradiencie
-// koloru (jasny liliowy -> ciemny fiolet/indygo), duzymi/grubymi kafelkami.
-static void drawTileWord(M5GFX& d, const char* word, int y,
-                         int tile, int gap, int letter_spacing) {
-    int n = strlen(word);
-    int pitch = tile + gap;
-    int letter_w = 4 * pitch + tile;
-    int total_w = n * letter_w + (n - 1) * letter_spacing;
-    int x = (SCREEN_W - total_w) / 2;
-
-    const uint8_t r1 = 245, g1 = 240, b1 = 255;
-    const uint8_t r2 = 90,  g2 = 40,  b2 = 170;
-
-    for (int i = 0; i < n; i++) {
-        float t = (n > 1) ? (float)i / (n - 1) : 0.0f;
-        uint8_t r = r1 + (int)((r2 - r1) * t);
-        uint8_t g = g1 + (int)((g2 - g1) * t);
-        uint8_t b = b1 + (int)((b2 - b1) * t);
-        const uint8_t* glyph = glyphFor(word[i]);
-        if (glyph) drawTileGlyph(d, x, y, glyph, RGB565(r, g, b), tile, gap);
-        x += letter_w + letter_spacing;
-    }
-}
-
 UITaskRetro::UITaskRetro(mesh::MainBoard* board, BaseSerialInterface* serial_iface)
     : AbstractUITask(board, serial_iface) {}
 
@@ -109,25 +85,40 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.fillScreen(C_BG);
 
-    // Ekran powitalny — "MESH" / "CORE" w dwoch liniach, duze/grube kafelki
-    // (mniej, wieksze bloki = bardziej pixel-art/bold), gradient jasny
-    // liliowy -> ciemny fiolet/indygo w kazdej linii, + "v0.1" pod spodem
+    // Ekran powitalny — "MESHCORE" zbudowany z kwadratowych kafelkow (jak
+    // logo TORLINK), litera po literze w gradiencie jasny liliowy -> ciemny
+    // fiolet/indygo, + malutkie "v0.1" pod spodem
     {
         M5GFX& d = M5Cardputer.Display;
 
-        const int tile = 6, gap = 1, pitch = tile + gap;
-        const int letter_h = 6 * pitch + tile;   // 7 wierszy
-        const int line_gap = 5;
-        int y1 = 3;
-        int y2 = y1 + letter_h + line_gap;
+        const char* title = "MESHCORE";
+        int n = strlen(title);
+        const int tile = 4, gap = 1, pitch = tile + gap;
+        const int letter_w = 4 * pitch + tile;  // 5 kolumn
+        const int letter_h = 6 * pitch + tile;  // 7 wierszy
+        const int letter_spacing = 5;
+        int total_w = n * letter_w + (n - 1) * letter_spacing;
+        int x = (SCREEN_W - total_w) / 2;
+        int y = 32;
 
-        drawTileWord(d, "MESH", y1, tile, gap, 6);
-        drawTileWord(d, "CORE", y2, tile, gap, 6);
+        // jasny liliowy -> ciemny fiolet/indygo
+        const uint8_t r1 = 245, g1 = 240, b1 = 255;
+        const uint8_t r2 = 90,  g2 = 40,  b2 = 170;
+
+        for (int i = 0; i < n; i++) {
+            float t = (n > 1) ? (float)i / (n - 1) : 0.0f;
+            uint8_t r = r1 + (int)((r2 - r1) * t);
+            uint8_t g = g1 + (int)((g2 - g1) * t);
+            uint8_t b = b1 + (int)((b2 - b1) * t);
+            const uint8_t* glyph = glyphFor(title[i]);
+            if (glyph) drawTileGlyph(d, x, y, glyph, RGB565(r, g, b), tile, gap);
+            x += letter_w + letter_spacing;
+        }
 
         d.setTextSize(1);
         d.setTextColor(C_TEXT_DIM, C_BG);
         int vw = d.textWidth("v0.1");
-        d.setCursor((SCREEN_W - vw) / 2, y2 + letter_h + 6);
+        d.setCursor((SCREEN_W - vw) / 2, y + letter_h + 10);
         d.print("v0.1");
 
         delay(1200);
