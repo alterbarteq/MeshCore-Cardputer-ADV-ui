@@ -6,9 +6,42 @@
 
 extern MyMesh the_mesh;
 
+// base64.hpp's functions aren't declared inline, so including the header here
+// too (BaseChatMesh.cpp already does) causes duplicate-symbol link errors —
+// just forward-declare the one function we need instead.
+unsigned int encode_base64(const unsigned char input[], unsigned int input_length, unsigned char output[]);
+
 static bool wordContains(const Keyboard_Class::KeysState& ks, char c) {
     for (auto ch : ks.word) { if (ch == c) return true; }
     return false;
+}
+
+// Znajduje "logiczny" (skompaktowany, bez pustych slotow) indeks kanalu i
+// zwraca odpowiadajacy mu prawdziwy indeks w tablicy kanalow mesh (-1 jesli
+// poza zakresem). MAX_GROUP_CHANNELS slotow moze miec dziury (usuniete/nigdy
+// nie uzyte), wiec UI zawsze widzi tylko kanaly z niepusta nazwa, po kolei.
+static int mapChannelIndex(int logical_idx) {
+    int count = 0;
+    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+        ChannelDetails ch;
+        if (the_mesh.getChannel(i, ch) && ch.name[0] != '\0') {
+            if (count == logical_idx) return i;
+            count++;
+        }
+    }
+    return -1;
+}
+
+// PSK kanalow "#nazwa" — pierwsze 16 bajtow SHA256("#nazwa"), zakodowane w
+// base64. Ta sama konwencja co inne klienty MeshCore (apka/CLI), zeby dwa
+// urzadzenia wpisujace ta sama nazwe kanalu dostaly identyczny klucz bez
+// recznej wymiany.
+static void deriveChannelPSK(const char* name, char* psk_b64_out, size_t out_len) {
+    uint8_t hash[32];
+    mesh::Utils::sha256(hash, sizeof(hash), (const uint8_t*)name, strlen(name));
+    unsigned int enc_len = encode_base64(hash, 16, (unsigned char*)psk_b64_out);
+    if (enc_len >= out_len) enc_len = out_len - 1;
+    psk_b64_out[enc_len] = '\0';
 }
 
 // ── Blokowa bitmapa 5x7 na ekran powitalny ("MESHCORE" z kafelkow) ─────────
@@ -63,6 +96,7 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
     _chat.setSendCallback(_onSend, this);
     _settings.setPrefs(node_prefs);
     _settings.setChangeCallback(_onSettingChange, this);
+    _channels.setCallbacks(_chCount, _chGetName, _chAdd, _chGetActive, _chSetActive, this);
 
     // Losowy PIN parowania BLE jest ustalany raz w MyMesh::begin() (przed
     // ui_task.begin()) — bez tego nigdzie nie bylo widac, co wpisac w
@@ -175,7 +209,8 @@ void UITaskRetro::_handleKeys() {
 
     Keyboard_Class::KeysState ks = M5Cardputer.Keyboard.keysState();
 
-    // OPT + strzalki = zmiana taba
+    // OPT + strzalki = zmiana taba; OPT samo (na CHAT) = wybor kanalu;
+    // OPT+N = od razu dodanie nowego kanalu
     if (ks.opt) {
         if (ks.right || ks.tab) {
             int next = ((int)_active_tab + 1) % (int)Tab::COUNT;
@@ -185,30 +220,45 @@ void UITaskRetro::_handleKeys() {
             int prev = ((int)_active_tab + (int)Tab::COUNT - 1) % (int)Tab::COUNT;
             _switchTab((Tab)prev); return;
         }
+        if (_active_tab == Tab::CHAT) {
+            if (wordContains(ks,'n') || wordContains(ks,'N')) {
+                _channel_overlay = true;
+                _channels.onEnter();
+                _channels.startAdding();
+            } else {
+                _channel_overlay = !_channel_overlay;
+                if (_channel_overlay) _channels.onEnter();
+            }
+            return;
+        }
     }
 
-    // Fn+1-5 = bezposrednie taby
+    // Nakladka wyboru/dodawania kanalow ma priorytet nad reszta klawiszy
+    if (_channel_overlay) {
+        bool consumed = _channels.onKey(ks);
+        if (consumed && ks.enter) _channel_overlay = false;   // wybrano/zapisano -> wroc do czatu
+        return;
+    }
+
+    // Fn+1-4 = bezposrednie taby
     if (ks.fn) {
         if (ks.f1 || wordContains(ks,'1')) { _switchTab(Tab::CHAT);     return; }
         if (ks.f2 || wordContains(ks,'2')) { _switchTab(Tab::NODES);    return; }
         if (ks.f3 || wordContains(ks,'3')) { _switchTab(Tab::MAP);      return; }
-        if (ks.f4 || wordContains(ks,'4')) { _switchTab(Tab::MYNODE);   return; }
-        if (ks.f5 || wordContains(ks,'5')) { _switchTab(Tab::SETTINGS); return; }
+        if (ks.f4 || wordContains(ks,'4')) { _switchTab(Tab::SETTINGS); return; }
     }
 
-    // F1-F5 bezposrednio
+    // F1-F4 bezposrednio
     if (ks.f1) { _switchTab(Tab::CHAT);     return; }
     if (ks.f2) { _switchTab(Tab::NODES);    return; }
     if (ks.f3) { _switchTab(Tab::MAP);      return; }
-    if (ks.f4) { _switchTab(Tab::MYNODE);   return; }
-    if (ks.f5) { _switchTab(Tab::SETTINGS); return; }
+    if (ks.f4) { _switchTab(Tab::SETTINGS); return; }
 
     // Dispatch do aktywnego ekranu
     switch (_active_tab) {
         case Tab::CHAT:     _chat.onKey(ks);     break;
         case Tab::NODES:    _nodes.onKey(ks);    break;
         case Tab::MAP:      _map.onKey(ks);      break;
-        case Tab::MYNODE:   _mynode.onKey(ks);   break;
         case Tab::SETTINGS: _settings.onKey(ks); break;
         default: break;
     }
@@ -221,11 +271,15 @@ void UITaskRetro::_drawFrame() {
                  _gps_fix,
                  _tx_count, _rx_count, _err_count);
 
+    if (_channel_overlay) {
+        _channels.draw();
+        return;
+    }
+
     switch (_active_tab) {
         case Tab::CHAT:     _chat.draw();     break;
         case Tab::NODES:    _nodes.draw();    break;
         case Tab::MAP:      _map.draw();      break;
-        case Tab::MYNODE:   _mynode.draw();   break;
         case Tab::SETTINGS: _settings.draw(); break;
         default: break;
     }
@@ -236,12 +290,12 @@ void UITaskRetro::_switchTab(Tab t) {
         case Tab::CHAT:     _chat.onLeave();     break;
         case Tab::NODES:    _nodes.onLeave();    break;
         case Tab::MAP:      _map.onLeave();      break;
-        case Tab::MYNODE:   _mynode.onLeave();   break;
         case Tab::SETTINGS: _settings.onLeave(); break;
         default: break;
     }
 
     _active_tab = t;
+    _channel_overlay = false;  // nakladka kanalow jest tylko dla CHAT
     M5Cardputer.Display.fillRect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
     _need_refresh = true;
 
@@ -249,7 +303,6 @@ void UITaskRetro::_switchTab(Tab t) {
         case Tab::CHAT:     _chat.onEnter();     break;
         case Tab::NODES:    _nodes.onEnter();    _updateNodeList(); break;
         case Tab::MAP:      _map.onEnter();      break;
-        case Tab::MYNODE:   _mynode.onEnter();   _updateMyNodeScreen(); break;
         case Tab::SETTINGS: _settings.onEnter(); break;
         default: break;
     }
@@ -280,23 +333,14 @@ void UITaskRetro::_updateNodeList() {
 }
 
 void UITaskRetro::_updateMyNodeScreen() {
-    _mynode.setNodeName(the_mesh.getNodeName());
-    _mynode.setBattMV(getBattMilliVolts());
-    _mynode.setFreeRAM(ESP.getFreeHeap());
-    _mynode.setFirmware(FIRMWARE_VERSION);
-
-    if (_node_prefs) {
-        _mynode.setFreq(_node_prefs->freq);
-        _mynode.setSF(_node_prefs->sf);
-        _mynode.setBW(_node_prefs->bw);
-        _mynode.setCR(_node_prefs->cr);
-        _mynode.setTxPower(_node_prefs->tx_power_dbm);
-    }
+    _settings.setBattMV(getBattMilliVolts());
+    _settings.setFreeRAM(ESP.getFreeHeap());
+    _settings.setFirmware(FIRMWARE_VERSION);
 
     char hex[20] = "0x";
     mesh::Utils::toHex(hex+2, the_mesh.self_id.pub_key, 4);
     hex[10] = '\0';
-    _mynode.setNodeId(hex);
+    _settings.setNodeId(hex);
 
     if (_sensors) {
         LocationProvider* loc = _sensors->getLocationProvider();
@@ -304,13 +348,13 @@ void UITaskRetro::_updateMyNodeScreen() {
             _gps_fix = true;
             int32_t lat6 = (int32_t)loc->getLatitude();
             int32_t lon6 = (int32_t)loc->getLongitude();
-            _mynode.setGPS(lat6, lon6, true);
+            _settings.setGPS(lat6, lon6, true);
             _map.setOwnPos(lat6, lon6);
         } else {
-            _mynode.setGPS(0, 0, false);
+            _settings.setGPS(0, 0, false);
         }
     }
-    _mynode.setSDOK(false);
+    _settings.refreshLiveStats();
 }
 
 void UITaskRetro::newMsg(uint8_t path_len, const char* from_name,
@@ -340,7 +384,7 @@ void UITaskRetro::_onSend(const char* text, void* ctx) {
     uint32_t timestamp = rtc_clock.getCurrentTime();
     int text_len = strlen(text);
     ChannelDetails ch;
-    if (the_mesh.getChannel(0, ch) && ch.name[0] != '\0') {
+    if (the_mesh.getChannel(self->_active_channel, ch) && ch.name[0] != '\0') {
         the_mesh.sendGroupMessage(timestamp, ch.channel,
             self->_node_prefs ? self->_node_prefs->node_name : "?",
             text, text_len);
@@ -361,6 +405,65 @@ void UITaskRetro::_onSettingChange(const char* key, const char* val, void* ctx) 
 
     if (!self->_node_prefs) return;
     the_mesh.savePrefs();
+}
+
+// ── Trampoliny kanalow dla ScreenChannels ──────────────────────────────────
+
+int UITaskRetro::_chCount(void* ctx) {
+    int count = 0;
+    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+        ChannelDetails ch;
+        if (the_mesh.getChannel(i, ch) && ch.name[0] != '\0') count++;
+    }
+    return count;
+}
+
+bool UITaskRetro::_chGetName(int idx, char* out, int maxlen, void* ctx) {
+    int real = mapChannelIndex(idx);
+    if (real < 0) return false;
+    ChannelDetails ch;
+    if (!the_mesh.getChannel(real, ch)) return false;
+    strncpy(out, ch.name, maxlen - 1);
+    out[maxlen - 1] = '\0';
+    return true;
+}
+
+bool UITaskRetro::_chAdd(const char* name, void* ctx) {
+    UITaskRetro* self = (UITaskRetro*)ctx;
+    char psk[32];
+    deriveChannelPSK(name, psk, sizeof(psk));
+    ChannelDetails* added = the_mesh.addChannel(name, psk);
+    if (!added) return false;
+
+    the_mesh.saveChannels();
+
+    // nowo dodany kanal jest w ostatnim niepustym slocie — od razu go wybierz
+    int last = -1;
+    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+        ChannelDetails ch;
+        if (the_mesh.getChannel(i, ch) && ch.name[0] != '\0') last = i;
+    }
+    if (last >= 0) self->_active_channel = last;
+    return true;
+}
+
+int UITaskRetro::_chGetActive(void* ctx) {
+    UITaskRetro* self = (UITaskRetro*)ctx;
+    int count = 0;
+    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+        ChannelDetails ch;
+        if (the_mesh.getChannel(i, ch) && ch.name[0] != '\0') {
+            if (i == self->_active_channel) return count;
+            count++;
+        }
+    }
+    return -1;
+}
+
+void UITaskRetro::_chSetActive(int idx, void* ctx) {
+    UITaskRetro* self = (UITaskRetro*)ctx;
+    int real = mapChannelIndex(idx);
+    if (real >= 0) self->_active_channel = real;
 }
 
 // Static member definitions

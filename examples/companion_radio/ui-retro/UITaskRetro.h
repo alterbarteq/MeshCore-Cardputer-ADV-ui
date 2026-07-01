@@ -8,8 +8,8 @@
 #include "ScreenChat.h"
 #include "ScreenNodes.h"
 #include "ScreenMap.h"
-#include "ScreenMyNode.h"
 #include "ScreenSettings.h"
+#include "ScreenChannels.h"
 #include <M5Cardputer.h>
 #include <helpers/ui/DisplayDriver.h>
 #include <helpers/SensorManager.h>
@@ -40,11 +40,14 @@ private:
     ScreenChat     _chat;
     ScreenNodes    _nodes;
     ScreenMap      _map;
-    ScreenMyNode   _mynode;
     ScreenSettings _settings;
+    ScreenChannels _channels;
 
     // Current active tab
-    Tab _active_tab = Tab::CHAT;
+    Tab  _active_tab      = Tab::CHAT;
+    // Nakladka wyboru/dodawania kanalow, dostepna z zakladki CHAT przez "opt"
+    bool _channel_overlay = false;
+    int  _active_channel  = 0;
 
     // Hardware
     DisplayDriver* _display    = nullptr;
@@ -79,4 +82,11 @@ private:
     // Send callback (static trampoline)
     static void _onSend(const char* text, void* ctx);
     static void _onSettingChange(const char* key, const char* val, void* ctx);
+
+    // Channel callbacks (static trampolines for ScreenChannels)
+    static int  _chCount(void* ctx);
+    static bool _chGetName(int idx, char* out, int maxlen, void* ctx);
+    static bool _chAdd(const char* name, void* ctx);
+    static int  _chGetActive(void* ctx);
+    static void _chSetActive(int idx, void* ctx);
 };

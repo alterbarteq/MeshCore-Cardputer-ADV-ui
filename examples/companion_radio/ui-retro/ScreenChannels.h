@@ -28,6 +28,14 @@ public:
 
     void onEnter() override { _adding = false; _need_redraw = true; }
 
+    // Otwiera od razu w trybie dodawania nowego kanalu (np. z "opt+n" w czacie)
+    void startAdding() {
+        memset(_add_buf, 0, sizeof(_add_buf));
+        _add_buf[0] = '#';
+        _adding = true;
+        _need_redraw = true;
+    }
+
     void draw() override {
         if (!_need_redraw) return;
         _need_redraw = false;

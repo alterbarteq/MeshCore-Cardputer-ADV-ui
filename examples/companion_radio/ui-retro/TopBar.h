@@ -53,8 +53,8 @@ public:
         d.print("\xE2\xAC\xA1MC"); // ⬡ MC  (approx – non-ASCII may render as '?', safe fallback)
 
         // tab labels
-        const uint16_t tab_w[]  = { 44, 48, 40, 40, 36 };  // widths per label
-        const uint16_t tab_x[]  = { 26, 70, 118, 158, 198 };
+        const uint16_t tab_w[]  = { 44, 50, 44, 76 };  // widths per label
+        const uint16_t tab_x[]  = { 26, 70, 120, 164 };
 
         for (int i = 0; i < (int)Tab::COUNT; i++) {
             bool is_active = ((int)active == i);

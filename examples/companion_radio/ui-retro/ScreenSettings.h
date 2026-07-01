@@ -11,6 +11,12 @@ struct SettingItem {
     bool editable;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  ScreenSettings
+//  Zakladka WEZEL/USTAWIENIA — polaczenie danych o wlasnym wezle (tozsamosc,
+//  radio, system, GPS, BLE PIN — dawniej osobny ekran ScreenMyNode) z
+//  edytowalna lista ustawien, jako jedna przewijalna lista.
+// ─────────────────────────────────────────────────────────────────────────────
 class ScreenSettings : public ScreenBase {
 public:
     using ChangeFn = void(*)(const char* key, const char* val, void* ctx);
@@ -20,6 +26,18 @@ public:
     // Losowy PIN parowania BLE generowany raz na sesje (patrz MyMesh::begin).
     // Bez tego nigdzie nie widac PINu potrzebnego do sparowania telefonu.
     void setBLEPin(uint32_t pin) { _ble_pin = pin; _buildItems(); _dirty = true; }
+
+    // ── Dane wlasnego wezla (dawniej ScreenMyNode) ─────────────────────────────
+    void setNodeId(const char* hex)   { strncpy(_node_id, hex, sizeof(_node_id)-1); _node_id[sizeof(_node_id)-1]='\0'; }
+    void setFirmware(const char* ver) { strncpy(_fw, ver, sizeof(_fw)-1); _fw[sizeof(_fw)-1]='\0'; }
+    void setBattMV(uint16_t mv)       { _batt_mv = mv; }
+    void setFreeRAM(uint32_t b)       { _free_ram = b; }
+    void setGPS(int32_t lat6, int32_t lon6, bool fix) { _lat6=lat6; _lon6=lon6; _gps_fix=fix; }
+
+    // Wywolywane okresowo (co kilka sekund) z UITaskRetro, zeby odswiezyc
+    // pozycje tylko-do-odczytu (uptime/RAM/bateria/GPS) bez utraty pozycji
+    // przewijania/zaznaczenia.
+    void refreshLiveStats() { if (!_editing) { _buildItems(); _dirty = true; } }
 
     static char s_wifi_ssid[33];
     static char s_wifi_pass[65];
@@ -37,7 +55,7 @@ public:
         clearContent();
         M5GFX& d = M5Cardputer.Display;
         d.setTextColor(C_TEXT_DIM, C_BG); d.setTextSize(FONT_SM);
-        d.setCursor(2, CONTENT_Y+1); d.print("USTAWIENIA");
+        d.setCursor(2, CONTENT_Y+1); d.print("WEZEL / USTAWIENIA");
         hline(CONTENT_Y + LINE_H - 1);
 
         int first=_scroll, last=min(_item_count, first+SETTINGS_ROWS);
@@ -99,12 +117,18 @@ public:
             // Nawigacja
             if (ks.up   && _sel>0)             { _sel--; _clampScroll(); consumed=true; }
             if (ks.down && _sel<_item_count-1) { _sel++; _clampScroll(); consumed=true; }
-            if (ks.enter && strcmp(_items[_sel].label,"GPS")==0 && _prefs) {
-    _prefs->gps_enabled = !_prefs->gps_enabled;
-    strncpy(_items[_sel].value, _prefs->gps_enabled?"ON":"OFF", sizeof(_items[0].value)-1);
-    if (_change_fn) _change_fn("GPS", _items[_sel].value, _ctx);
-    consumed=true;
-} else if (ks.enter && _items[_sel].editable) {
+            const char* sel_label = _items[_sel].label;
+            if (ks.enter && strcmp(sel_label,"GPS")==0 && _prefs) {
+                _prefs->gps_enabled = !_prefs->gps_enabled;
+                strncpy(_items[_sel].value, _prefs->gps_enabled?"ON":"OFF", sizeof(_items[0].value)-1);
+                if (_change_fn) _change_fn("GPS", _items[_sel].value, _ctx);
+                consumed=true;
+            } else if (ks.enter && strcmp(sel_label,"Sciezka")==0 && _prefs) {
+                _prefs->path_hash_mode = (_prefs->path_hash_mode + 1) % 3;
+                strncpy(_items[_sel].value, _pathHashLabel(_prefs->path_hash_mode), sizeof(_items[0].value)-1);
+                if (_change_fn) _change_fn("Sciezka", _items[_sel].value, _ctx);
+                consumed=true;
+            } else if (ks.enter && _items[_sel].editable) {
                 strncpy(_edit_buf, _items[_sel].value, sizeof(_edit_buf)-1);
                 _edit_buf[sizeof(_edit_buf)-1]='\0';
                 _editing=true; consumed=true;
@@ -116,7 +140,7 @@ public:
     }
 
 private:
-    static const int MAX_ITEMS=12;
+    static const int MAX_ITEMS=20;
     SettingItem _items[MAX_ITEMS]={};
     int  _item_count=0, _sel=0, _scroll=0;
     bool _dirty=true, _editing=false;
@@ -124,6 +148,29 @@ private:
     NodePrefs* _prefs=nullptr;
     uint32_t _ble_pin=0;
     ChangeFn _change_fn=nullptr; void* _ctx=nullptr;
+
+    // Dane wlasnego wezla (dawniej ScreenMyNode)
+    char     _node_id[20] = "0x????????";
+    char     _fw[24]      = "v?";
+    uint16_t _batt_mv     = 0;
+    uint32_t _free_ram    = 0;
+    int32_t  _lat6        = 0;
+    int32_t  _lon6        = 0;
+    bool     _gps_fix     = false;
+
+    static const char* _pathHashLabel(uint8_t mode) {
+        switch (mode) {
+            case 0:  return "1 bajt";
+            case 1:  return "2 bajty";
+            default: return "3 bajty";
+        }
+    }
+
+    static uint8_t _battPct(uint16_t mv) {
+        if (mv >= 4200) return 100;
+        if (mv <= 3500) return 0;
+        return (uint8_t)((mv - 3500) * 100UL / 700UL);
+    }
 
     void _loadWiFiFromNVS() {
         Preferences pref;
@@ -135,7 +182,13 @@ private:
 
     void _buildItems() {
         _item_count=0;
+
+        // ── Tozsamosc ───────────────────────────────────────────────────────
         _addItem("Node Name", _prefs?_prefs->node_name:"???", true);
+        _addItem("Node ID",   _node_id, false);
+        _addItem("Firmware",  _fw,      false);
+
+        // ── Radio LoRa ──────────────────────────────────────────────────────
         char freq[16]; snprintf(freq,sizeof(freq),"%.3f",_prefs?_prefs->freq:868.0f);
         _addItem("Freq MHz", freq, true);
         char sf[8]; snprintf(sf,sizeof(sf),"%d",_prefs?_prefs->sf:11);
@@ -144,11 +197,32 @@ private:
         _addItem("BW kHz", bw, true);
         char tx[8]; snprintf(tx,sizeof(tx),"%d",_prefs?_prefs->tx_power_dbm:20);
         _addItem("TX Power", tx, true);
+        // Rozmiar hasha sciezki (0/1/2 -> 1/2/3 bajty) — nowosc w MeshCore,
+        // wieksze pomieszczenie sciezki kosztem wiekszej szansy kolizji hasha
+        _addItem("Sciezka", _pathHashLabel(_prefs?_prefs->path_hash_mode:0), false);
+
+        // ── Siec / WiFi (do mapy) ───────────────────────────────────────────
         _addItem("WiFi SSID", s_wifi_ssid[0]?s_wifi_ssid:"", true);
         _addItem("WiFi Pass", s_wifi_pass[0]?"****":"", true);
         char to[8]; snprintf(to,sizeof(to),"%d",_prefs?_prefs->screen_timeout_seconds:300);
         _addItem("Timeout s", to, true);
         _addItem("GPS", _prefs?(_prefs->gps_enabled?"ON":"OFF"):"?", true);
+
+        char posbuf[32];
+        if (_gps_fix) snprintf(posbuf,sizeof(posbuf),"%.4fN %.4fE", _lat6/1e6, _lon6/1e6);
+        _addItem("Pozycja", _gps_fix?posbuf:"BRAK SYGNALU", false);
+
+        // ── System ──────────────────────────────────────────────────────────
+        unsigned long s = millis()/1000;
+        char up[16]; snprintf(up,sizeof(up),"%02lu:%02lu:%02lu", s/3600,(s%3600)/60,s%60);
+        _addItem("Uptime", up, false);
+
+        char ram[16]; snprintf(ram,sizeof(ram),"%lu KB", (unsigned long)(_free_ram/1024));
+        _addItem("RAM", ram, false);
+
+        char bat[24]; snprintf(bat,sizeof(bat),"%d%% (%d mV)", _battPct(_batt_mv), _batt_mv);
+        _addItem("Bateria", bat, false);
+
         // Losowy PIN parowania BLE (0 lub domyslne 123456 = brak wyswietlania,
         // patrz MyMesh::begin — wtedy uzywany jest tryb bez wyswietlacza).
         if (_ble_pin != 0 && _ble_pin != 123456) {
@@ -205,4 +279,3 @@ private:
         if (_sel>=_scroll+SETTINGS_ROWS)   _scroll=_sel-SETTINGS_ROWS+1;
     }
 };
-

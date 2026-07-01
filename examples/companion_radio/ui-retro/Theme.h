@@ -45,13 +45,14 @@
 // ─────────────────────────────────────────────────
 //  Tabs
 // ─────────────────────────────────────────────────
+// F4 laczy dawny "MOJ WEZEL" i "USTAWIENIA" w jedna przewijalna liste
+// (patrz ScreenSettings) — F5 jest teraz wolne.
 enum class Tab : uint8_t {
     CHAT     = 0,
     NODES    = 1,
     MAP      = 2,
-    MYNODE   = 3,
-    SETTINGS = 4,
-    COUNT    = 5
+    SETTINGS = 3,
+    COUNT    = 4
 };
 
 // Tab labels shown in top bar
@@ -59,6 +60,5 @@ static const char* const TAB_LABELS[] = {
     "F1:CZAT",
     "F2:WEZLY",
     "F3:MAPA",
-    "F4:WEZL",
-    "F5:UST"
+    "F4:WEZEL/UST",
 };
