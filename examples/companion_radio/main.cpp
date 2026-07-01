@@ -125,31 +125,6 @@ void setup() {
   DisplayDriver* disp = NULL;
   if (display.begin()) {
     disp = &display;
-    disp->startFrame();
-    
-    // Clear screen to black
-    disp->setColor(DisplayDriver::DARK);
-    disp->fillRect(0, 0, disp->width(), disp->height());
-    
-    // Set text color to white
-    disp->setColor(DisplayDriver::LIGHT);
-    
-    // Draw "MeshCore" - large, centered
-    disp->setTextSize(4);
-    disp->drawTextCentered(disp->width() / 2, 35, "MeshCore");
-    
-    // Draw "Cardputer" - medium, centered
-    disp->setTextSize(2);
-    disp->drawTextCentered(disp->width() / 2, 76, "Cardputer");
-    
-    // Draw "Made by Stachu" - small, bottom right
-    disp->setTextSize(1);
-    const char* author = "Made by Stachu";
-    int text_width = disp->getTextWidth(author);
-    disp->setCursor(disp->width() - text_width - 2, disp->height() - 10);
-    disp->print(author);
-    
-    disp->endFrame();
   }
 #endif
 
