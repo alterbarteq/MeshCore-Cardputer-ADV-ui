@@ -210,7 +210,8 @@ private:
     void _tryFetchTile() {
         if (_fetching) return;
         if (ESP.getFreePsram() < TILE_MIN_PSRAM) {
-            Serial.printf("[MAP] Za malo wolnego PSRAM: %u bajtow\n", (unsigned)ESP.getFreePsram());
+            Serial.printf("[MAP] Za malo PSRAM: wolne=%u calkowite=%u\n",
+                          (unsigned)ESP.getFreePsram(), (unsigned)ESP.getPsramSize());
             _status = MapStatus::ERR; return;
         }
 
