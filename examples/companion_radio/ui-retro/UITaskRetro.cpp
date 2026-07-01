@@ -11,6 +11,41 @@ static bool wordContains(const Keyboard_Class::KeysState& ks, char c) {
     return false;
 }
 
+// ── Blokowa bitmapa 5x7 na ekran powitalny ("MESHCORE" z kafelkow) ─────────
+static const uint8_t GLYPH_M[7] = {0b10001,0b11011,0b10101,0b10101,0b10001,0b10001,0b10001};
+static const uint8_t GLYPH_E[7] = {0b11111,0b10000,0b10000,0b11110,0b10000,0b10000,0b11111};
+static const uint8_t GLYPH_S[7] = {0b01111,0b10000,0b10000,0b01110,0b00001,0b00001,0b11110};
+static const uint8_t GLYPH_H[7] = {0b10001,0b10001,0b10001,0b11111,0b10001,0b10001,0b10001};
+static const uint8_t GLYPH_C[7] = {0b01111,0b10000,0b10000,0b10000,0b10000,0b10000,0b01111};
+static const uint8_t GLYPH_O[7] = {0b01110,0b10001,0b10001,0b10001,0b10001,0b10001,0b01110};
+static const uint8_t GLYPH_R[7] = {0b11110,0b10001,0b10001,0b11110,0b10100,0b10010,0b10001};
+
+static const uint8_t* glyphFor(char c) {
+    switch (c) {
+        case 'M': return GLYPH_M;
+        case 'E': return GLYPH_E;
+        case 'S': return GLYPH_S;
+        case 'H': return GLYPH_H;
+        case 'C': return GLYPH_C;
+        case 'O': return GLYPH_O;
+        case 'R': return GLYPH_R;
+        default:  return nullptr;
+    }
+}
+
+// Rysuje jedna litere jako siatke 5x7 kwadracikow ("kafelkow")
+static void drawTileGlyph(M5GFX& d, int x, int y, const uint8_t* glyph,
+                          uint16_t color, int tile, int gap) {
+    int pitch = tile + gap;
+    for (int row = 0; row < 7; row++) {
+        for (int col = 0; col < 5; col++) {
+            if (glyph[row] & (1 << (4 - col))) {
+                d.fillRect(x + col * pitch, y + row * pitch, tile, tile, color);
+            }
+        }
+    }
+}
+
 UITaskRetro::UITaskRetro(mesh::MainBoard* board, BaseSerialInterface* serial_iface)
     : AbstractUITask(board, serial_iface) {}
 
@@ -50,42 +85,43 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.fillScreen(C_BG);
 
-    // Ekran powitalny — napis "MeshCore" jako gradient roznych odcieni
-    // fioletu (litera po literze, jasny liliowy -> ciemny fiolet), jak logo
-    // TORLINK, + malutkie "v0.1" pod spodem
+    // Ekran powitalny — "MESHCORE" zbudowany z kwadratowych kafelkow (jak
+    // logo TORLINK), litera po literze w gradiencie jasny liliowy -> ciemny
+    // fiolet/indygo, + malutkie "v0.1" pod spodem
     {
         M5GFX& d = M5Cardputer.Display;
-        d.setTextSize(3);
 
-        const char* title = "MeshCore";
+        const char* title = "MESHCORE";
         int n = strlen(title);
-        int tw = d.textWidth(title);
-        int x = (SCREEN_W - tw) / 2;
-        int y = 48;
+        const int tile = 4, gap = 1, pitch = tile + gap;
+        const int letter_w = 4 * pitch + tile;  // 5 kolumn
+        const int letter_h = 6 * pitch + tile;  // 7 wierszy
+        const int letter_spacing = 5;
+        int total_w = n * letter_w + (n - 1) * letter_spacing;
+        int x = (SCREEN_W - total_w) / 2;
+        int y = 32;
 
         // jasny liliowy -> ciemny fiolet/indygo
-        const uint8_t r1=225,g1=180,b1=255;
-        const uint8_t r2=90, g2=50, b2=190;
+        const uint8_t r1 = 245, g1 = 240, b1 = 255;
+        const uint8_t r2 = 90,  g2 = 40,  b2 = 170;
 
         for (int i = 0; i < n; i++) {
             float t = (n > 1) ? (float)i / (n - 1) : 0.0f;
             uint8_t r = r1 + (int)((r2 - r1) * t);
             uint8_t g = g1 + (int)((g2 - g1) * t);
             uint8_t b = b1 + (int)((b2 - b1) * t);
-            char ch[2] = { title[i], '\0' };
-            d.setTextColor(RGB565(r, g, b), C_BG);
-            d.setCursor(x, y);
-            d.print(ch);
-            x += d.textWidth(ch);
+            const uint8_t* glyph = glyphFor(title[i]);
+            if (glyph) drawTileGlyph(d, x, y, glyph, RGB565(r, g, b), tile, gap);
+            x += letter_w + letter_spacing;
         }
 
         d.setTextSize(1);
         d.setTextColor(C_TEXT_DIM, C_BG);
         int vw = d.textWidth("v0.1");
-        d.setCursor((SCREEN_W - vw) / 2, 80);
+        d.setCursor((SCREEN_W - vw) / 2, y + letter_h + 10);
         d.print("v0.1");
 
-        delay(1000);
+        delay(1200);
         d.fillScreen(C_BG);
     }
 
