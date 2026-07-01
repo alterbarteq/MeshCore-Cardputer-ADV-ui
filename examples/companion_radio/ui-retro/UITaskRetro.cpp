@@ -225,9 +225,11 @@ void UITaskRetro::_handleKeys() {
                 _channel_overlay = true;
                 _channels.onEnter();
                 _channels.startAdding();
+            } else if (_channel_overlay) {
+                _closeChannelOverlay();
             } else {
-                _channel_overlay = !_channel_overlay;
-                if (_channel_overlay) _channels.onEnter();
+                _channel_overlay = true;
+                _channels.onEnter();
             }
             return;
         }
@@ -240,7 +242,7 @@ void UITaskRetro::_handleKeys() {
         // Enter podczas wpisywania nazwy tylko zatwierdza kanal i wraca do
         // LISTY (w tej samej nakladce) — nakladke zamykamy dopiero gdy Enter
         // faktycznie wybral kanal z listy.
-        if (consumed && ks.enter && !was_adding) _channel_overlay = false;
+        if (consumed && ks.enter && !was_adding) _closeChannelOverlay();
         return;
     }
 
@@ -287,6 +289,16 @@ void UITaskRetro::_drawFrame() {
         case Tab::SETTINGS: _settings.draw(); break;
         default: break;
     }
+}
+
+void UITaskRetro::_closeChannelOverlay() {
+    _channel_overlay = false;
+    // ScreenChat ma wlasna wewnetrzna flage "trzeba przerysowac", ktora nie
+    // byla ustawiana podczas gdy klawisze szly do nakladki kanalow — bez
+    // tego czat zostawal na ekranie w stanie sprzed otwarcia nakladki,
+    // dopoki cos innego (np. wpisanie znaku) nie wymusilo redraw.
+    M5Cardputer.Display.fillRect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
+    _chat.onEnter();
 }
 
 void UITaskRetro::_switchTab(Tab t) {
