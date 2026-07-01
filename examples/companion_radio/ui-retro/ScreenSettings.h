@@ -1,6 +1,7 @@
 #pragma once
 #include "ScreenBase.h"
 #include "../NodePrefs.h"
+#include <Preferences.h>
 
 #define SETTINGS_ROWS  ((CONTENT_H - LINE_H) / LINE_H)
 
@@ -14,7 +15,7 @@ class ScreenSettings : public ScreenBase {
 public:
     using ChangeFn = void(*)(const char* key, const char* val, void* ctx);
     void setChangeCallback(ChangeFn fn, void* ctx) { _change_fn=fn; _ctx=ctx; }
-    void setPrefs(NodePrefs* p) { _prefs=p; _buildItems(); }
+    void setPrefs(NodePrefs* p) { _prefs=p; _loadWiFiFromNVS(); _buildItems(); }
 
     // Losowy PIN parowania BLE generowany raz na sesje (patrz MyMesh::begin).
     // Bez tego nigdzie nie widac PINu potrzebnego do sparowania telefonu.
@@ -124,6 +125,14 @@ private:
     uint32_t _ble_pin=0;
     ChangeFn _change_fn=nullptr; void* _ctx=nullptr;
 
+    void _loadWiFiFromNVS() {
+        Preferences pref;
+        pref.begin("retro-ui", true);
+        pref.getString("wifi_ssid", s_wifi_ssid, sizeof(s_wifi_ssid));
+        pref.getString("wifi_pass", s_wifi_pass, sizeof(s_wifi_pass));
+        pref.end();
+    }
+
     void _buildItems() {
         _item_count=0;
         _addItem("Node Name", _prefs?_prefs->node_name:"???", true);
@@ -162,12 +171,20 @@ private:
         const char* lbl=_items[_sel].label;
         if (strcmp(lbl,"WiFi SSID")==0) {
             strncpy(s_wifi_ssid,_edit_buf,sizeof(s_wifi_ssid)-1);
+            Preferences pref; pref.begin("retro-ui", false);
+            pref.putString("wifi_ssid", s_wifi_ssid);
+            pref.end();
             strncpy(_items[_sel].value,"(zapisano)",sizeof(_items[0].value)-1);
+            if (_change_fn) _change_fn(lbl, s_wifi_ssid, _ctx);
             return;
         }
         if (strcmp(lbl,"WiFi Pass")==0) {
             strncpy(s_wifi_pass,_edit_buf,sizeof(s_wifi_pass)-1);
+            Preferences pref; pref.begin("retro-ui", false);
+            pref.putString("wifi_pass", s_wifi_pass);
+            pref.end();
             strncpy(_items[_sel].value,"****",sizeof(_items[0].value)-1);
+            if (_change_fn) _change_fn(lbl, s_wifi_pass, _ctx);
             return;
         }
         strncpy(_items[_sel].value, _edit_buf, sizeof(_items[0].value)-1);
