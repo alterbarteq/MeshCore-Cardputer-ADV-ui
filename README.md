@@ -1,202 +1,98 @@
-# 🔥 MeshCore-Cardputer-ADV 🔥
+# MeshCore Cardputer ADV — Retro Terminal UI
 
-> **📌 Fork notice:** This is a personal fork of [Stachugit/MeshCore-Cardputer-ADV](https://github.com/Stachugit/MeshCore-Cardputer-ADV) by Stanisław "Stachu" Piskorski, who did all of the original groundwork for this firmware (the base described throughout this README, including the chat/settings UI, LoRa cap integration, and web flasher). This fork replaces that UI with a custom "retro terminal" interface (`ui-retro`) — most of the feature descriptions and screenshots below still show Stachu's original UI, not this fork's. Please support his work at [buymeacoffee.com/Stachu](https://buymeacoffee.com/Stachu).
+A from-scratch, terminal-styled UI (`ui-retro`) for [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh networking firmware, built for the M5Stack Cardputer ADV with the Cap LoRa-1262/868 module. Dark background, single violet accent, monospace text, reverse-video selection — no chat bubbles, no icon menus.
 
-[![Buy Me a Coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=☕&slug=Stachu&button_colour=ff8800&font_colour=000000&font_family=Lato&outline_colour=000000&coffee_colour=FFDD00)](https://buymeacoffee.com/Stachu)
+> **📌 Fork notice:** This is a personal fork of [Stachugit/MeshCore-Cardputer-ADV](https://github.com/Stachugit/MeshCore-Cardputer-ADV) by Stanisław "Stachu" Piskorski, who did all of the original groundwork this fork builds on (Cap LoRa-1262 support, BLE pairing, base companion-radio integration). This fork replaces his UI entirely with a custom retro terminal interface described below. Please support his work at [buymeacoffee.com/Stachu](https://buymeacoffee.com/Stachu).
 
-## 🌐 Quick Flash via Web Flasher (Recommended)
+## Hardware
 
-### **[⚡ Flash Firmware Online →](https://meshcorecardputeradv.vercel.app/)**
+- **M5Stack Cardputer ADV** (ESP32-S3FN8 — **no PSRAM**, despite some board labels suggesting otherwise)
+- **Cap LoRa-1262/868** radio module attached (863–870 MHz band)
+- microSD card (optional, used for offline map tiles — see Map tab below)
 
-✅ **No installation needed!** Flash directly from your browser  
-✅ **Preserves your settings** - keeps all your data intact  
-✅ **Fast and easy** - just connect and click
+## Tabs
 
----
+| Key | Tab | Contents |
+|-----|-----|----------|
+| **F1** | Chat | Group channel chat, one channel at a time |
+| **F2** | Nodes | List of contacts heard on the mesh |
+| **F3** | Map | Offline OSM map with your position + heard nodes |
+| **F4** | Node & Settings | Device info + all configurable settings, one scrollable list |
 
-Enhanced TFT user interface for MeshCore mesh networking firmware, optimized for M5Stack Cardputer-Adv with Cap LoRa-1262.
+Switch tabs with **F1–F4**, **Fn+1–4**, or **Opt+←/→**.
 
-![MeshCore-Cardputer-ADV](docs/images/Imagecardp.png)
+## Chat (F1)
 
-## 📸 Screenshots
+- Messages are kept **separated per channel** — the channel you're currently viewing/composing to is always shown in the header at the top of the chat screen.
+- If a message arrives on a channel you're **not** currently viewing, a yellow **`!`** appears next to `F1:CZAT` in the top bar until you switch to that channel.
+- **Opt** opens the channel picker (pick which channel to view/send to).
+- **Opt+N** opens the picker directly in "create new channel" mode. New channel names must start with `#` (e.g. `#warszawa`); the channel's PSK is derived automatically from the name (`SHA256("#name")`, first 16 bytes, base64) so another device typing the same name joins the same channel without manually exchanging keys.
+- **Fn+↑ / Fn+↓** scroll the message history.
+- **Enter** sends the typed message; **Backspace/Del** edits it.
 
-<details>
-<summary>Click to view screenshots</summary>
+## Nodes (F2)
 
-### Main Interface
-| Chat | Contacts | Channels |
-|------|----------|----------|
-| ![Chat](docs/images/Chat.bmp) | ![Contact](docs/images/Contact.bmp) | ![Channel](docs/images/Channel.bmp) |
+Scrollable list of contacts heard on the mesh (**↑/↓**), each with signal path info.
 
-### Settings Menu
-| Main Settings | Public Info | Radio Setup |
-|---------------|-------------|-------------|
-| ![Settings](docs/images/Settings.bmp) | ![Public Info](docs/images/Publicinfo.bmp) | ![Radio Setup](docs/images/RadioSetup.bmp) |
+## Map (F3)
 
-### Radio Configuration
-| Choose Preset | Manual Setup | Device Info |
-|---------------|--------------|-------------|
-| ![Choose Preset](docs/images/ChoosePreset.bmp) | ![Manual Setup](docs/images/ManualSetup.bmp) | ![Device Info](docs/images/DeviceInfo.bmp) |
+Real OpenStreetMap tiles, loaded from a **microSD card** rather than fetched live over the network. This board has no PSRAM and not enough free heap left for a TLS handshake once mesh+WiFi+BLE+UI are all running, so live HTTPS tile fetching isn't viable here — SD is the workaround.
 
-### Customization
-| Theme Settings | Other Options |
-|----------------|---------------|
-| ![Theme](docs/images/Theme.bmp) | ![Other](docs/images/Other.bmp) |
+- Tile convention: standard Web Mercator slippy-map tiles, `/maptiles/{z}/{x}/{y}.png` on the card — the same layout most offline-map tools use, so tiles downloaded for your area of interest (e.g. from tile.openstreetmap.org, respecting their usage policy) can be copied on as-is.
+- **Fn+↑ / Fn+↓** zoom in/out.
+- Your position and any heard nodes' positions are plotted as dots over the tile.
+- If no tile/card is available, a phosphor dot-grid placeholder is shown instead of a blank screen — the screen is never empty even without SD map data.
+- ⚠️ SD card mounting is currently **disabled** in this build (a flaky card previously froze the whole UI on mount) — this is on the list to revisit.
 
-</details>
+## Node & Settings (F4)
 
-## 📦 Installation Options
+One scrollable list combining device info and configuration:
 
-### Option 1: Web Flasher (⭐ Recommended)
-Visit **[https://meshcorecardputeradv.vercel.app/](https://meshcorecardputeradv.vercel.app/)** and flash directly from your browser!
-
-**Why use the Web Flasher?**
-- ✅ No software installation required
-- ✅ Preserves all your settings and data
-- ✅ Fastest and easiest method
-- ✅ Works on any modern browser
-
-### Option 2: M5Burner
-Search in M5Burner for:
-- `MeshCore-Cardputer-ADV M5Stack Cap LoRa1262 version!!!!` - **Plug-and-play**
-
-⚠️ **WARNING**: Flashing with M5Burner will erase all data from your device, including settings, contacts, and channels. Use the Web Flasher to preserve your data.
-
-### Option 3: Pre-compiled Binary
-Download `firmware_Cap_LoRa-1262.bin` from [Releases](https://github.com/Stachugit/MeshCore-Cardputer-ADV/releases) and flash using esptool.py or ESP Flash Download Tool.
-
-## 🔧 Hardware Requirements
-
-### M5Stack Cap LoRa-1262 (Required)
-Simply attach the Cap LoRa-1262 to your Cardputer-Adv - no wiring needed!
-- **Module**: RA-01SH (SX1262)
-- **Frequency**: 863-870 MHz
-- **Documentation**: [Cap LoRa-1262](https://docs.m5stack.com/en/cap/Cap_LoRa-1262)
-
-## ✨ Features
-
-### Chat Interface
-- **Chat bubbles** with sender names
-- **150-character limit** with real-time counter
-- **Notification popups** for new messages
-- **Message scrolling** with FN+UP/DOWN
-- **18 color themes** with brightness control
-- **Real-time search** in contacts and channels
-
-### Keyboard Controls
-- **🟠 ↑** - Up
-- **🟠 ↓** - Down
-- **🟠 ←** - Contacts
-- **🟠 →** - Channels
-- **Enter** - Send/Select
-- **Backspace** - Delete | **Hold Backspace** - Clear all
-- **🟠 FN+ESC** - Go back
-- **Opt** - Go back
-- **🟠 FN+↑** / **🟠 FN+↓** - Scroll messages (in writing mode)
-- **🟠 FN+DEL** - Delete contacts/channels
-- **G0(Top right button)** - Send an advert
-
-### Settings Menu (☰)
-
-Access the settings menu via the **☰** icon in the top-left corner. All settings persist across restarts.
-
-#### 📱 Public Info
-- **Change Name** - Modify device name
-- **Share Key** - Display QR code with public key for easy pairing
-- **Share Position** - Enable/disable position sharing in advertisements
-
-#### 📡 Radio Setup
-- **GPS On/Off** - Enable or disable GPS (position checked every 3 minutes)
-- **Choose Preset** - Select from predefined radio configurations
-- **Manual Setup** - Configure individual parameters:
-  - Frequency
-  - Bandwidth
-  - Spreading Factor (SF)
-  - Coding Rate (CR)
-  - TX Power
-
-#### 🎨 Theme
-- **Brightness Control** - Adjust screen brightness
-- **Color Schemes** - Choose from 18 available themes
-
-#### ⚙️ Other
-- **Sleep Timeout** - Screen auto-sleep options: 10s, 30s, 1m, 2m, 5m, Never
-- **Factory Reset** - Restore device to factory settings (generates new key)
-- **Spark the Project** - Support development via QR code (links to Buy Me a Coffee)
-
-#### 📊 Device Info
-View real-time device information:
-- Device name
-- Battery status
-- GPS coordinates
+- Node name (editable), node ID, firmware version, uptime, free RAM, battery
+- GPS position + **GPS on/off** toggle
+- BLE pairing PIN
 - Radio frequency
-- Spreading Factor (SF)
-- TX Power
-- System uptime
+- Path/message hash size — **1 / 2 / 3-byte**, cycled with Enter
+- **↑/↓** navigate, **Enter** edits/toggles the selected item, **Del/Backspace** cancels an edit in progress.
 
-## 🚀 Initial Setup
+## Sending an advert
 
-**Important**: First-time configuration requires the MeshCore mobile app:
+Press **Tab** from any tab to open a popup to send a self-advertisement:
 
-1. Flash firmware to Cardputer-Adv (via web flasher or M5Burner)
-2. Download MeshCore app on your smartphone
-3. Connect via Bluetooth using the pairing code displayed in the top-right corner of the screen
-4. Configure node name, region, network keys, and channels
+- **Advert (flood)** — broadcast to the whole mesh
+- **Zero-hop** — advertise to directly-reachable nodes only
 
-## 🆕 What's New in This Version
+**↑/↓** to choose, **Enter** to send, **Del/Backspace/Tab** to cancel.
 
-### Major Features
-- **Delete contacts and channels** from device using FN+DEL
-- **Comprehensive settings menu** organized into tabs: Public Info, Radio Setup, Theme, Other, and Device Info
-- **GPS integration** with 3-minute position update intervals
-- **Manual radio configuration** for advanced users
-- **QR code sharing** for easy device pairing
-- **Position sharing toggle** for privacy control
-- **Multiple sleep timeout options** for battery optimization
-- **Factory reset option** for easy device reconfiguration
-
-### Improvements
-- Enhanced Cap LoRa-1262 compatibility and stability
-- UI refinements for better usability
-- Power consumption optimizations for extended battery life
-- Improved Bluetooth pairing experience
-
-## 🛠️ Building from Source
+## Building from source
 
 ```bash
-git clone https://github.com/Stachugit/MeshCore-Cardputer-ADV.git
-cd MeshCore-Cardputer-ADV
-
-# For Cap LoRa-1262:
-pio run -e M5stack_cardputer_cap_lora1262_companion --target upload
+git clone https://github.com/alterbarteq/MeshCore-Cardputer-ADV-ui.git
+cd MeshCore-Cardputer-ADV-ui
+cp retro_env_only.ini platformio.local.ini   # picked up automatically via extra_configs
+pio run -e M5stack_cardputer_retro_ui --target upload
 ```
 
-## 🙏 Credits
+## Initial setup
 
-Based on [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh networking firmware. The bulk of this project — custom TFT UI, chat bubbles, comprehensive settings system, theme customization, enhanced keyboard navigation, and Cap LoRa-1262 support — is the work of [Stachugit/MeshCore-Cardputer-ADV](https://github.com/Stachugit/MeshCore-Cardputer-ADV) (Stanisław "Stachu" Piskorski). This fork builds on top of that with a separate, custom "retro terminal" UI (`ui-retro`).
+First-time configuration requires the MeshCore mobile app:
 
-Cap LoRa-1262 compatibility fixes based on work by [sosprz](https://github.com/sosprz/meshcore-cardputer-adv).
+1. Flash the firmware.
+2. Install the MeshCore app on your phone.
+3. Pair over Bluetooth using the PIN shown on the **F4** (Node & Settings) screen.
+4. Configure node name, region, radio parameters, and channels from the app or from F4/F1 directly on-device.
 
-## 📜 License
+## Credits
 
-Same license as original MeshCore firmware. See [license.txt](license.txt).
+- Built on [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh networking firmware.
+- Original Cardputer ADV / Cap LoRa-1262 groundwork by [Stachugit/MeshCore-Cardputer-ADV](https://github.com/Stachugit/MeshCore-Cardputer-ADV) (Stanisław "Stachu" Piskorski) — support at [buymeacoffee.com/Stachu](https://buymeacoffee.com/Stachu).
+- Cap LoRa-1262 compatibility fixes based on work by [sosprz](https://github.com/sosprz/meshcore-cardputer-adv).
+- Retro terminal UI (`ui-retro`) is this fork's own addition on top of the above.
 
-## 🤝 Contributing
+## License
 
-Contributions welcome! Report bugs, suggest features, submit pull requests, or improve documentation.
+Same license as the original MeshCore firmware. See [license.txt](license.txt).
 
-## 🔗 Links
+## Disclaimer
 
-- **Web Flasher**: https://meshcorecardputeradv.vercel.app/
-- **Original MeshCore**: https://github.com/meshcore-dev/MeshCore
-- **M5Stack Cardputer-ADV**: https://shop.m5stack.com/products/m5stack-cardputer-adv-version-esp32-s3
-- **Cap LoRa-1262**: https://docs.m5stack.com/en/cap/Cap_LoRa-1262
-- **Support Development**: https://buymeacoffee.com/Stachu
-
-## ⚠️ Disclaimer
-
-Independent UI modification of MeshCore. For core networking questions, refer to the original project.
-
----
-
-**Version**: 1.1.0 | **Last Updated**: January 27, 2026
+Independent UI fork of MeshCore. For core mesh networking questions, refer to the [original project](https://github.com/meshcore-dev/MeshCore).
