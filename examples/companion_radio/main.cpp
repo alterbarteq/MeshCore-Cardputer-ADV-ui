@@ -87,8 +87,13 @@ static uint32_t _atoi(const char* sp) {
 
 /* GLOBAL OBJECTS */
 #ifdef DISPLAY_CLASS
-  #include "UITask.h"
-  UITask ui_task(&board, &serial_interface);
+  #ifdef RETRO_UI
+    #include "UITaskRetro.h"
+    UITaskRetro ui_task(&board, &serial_interface);
+  #else
+    #include "UITask.h"
+    UITask ui_task(&board, &serial_interface);
+  #endif
 #endif
 
 StdRNG fast_rng;
@@ -268,7 +273,9 @@ void loop() {
     delay(1500);  // Show for 1.5 seconds
     
     // Force UI refresh to return to previous screen
+    #ifndef RETRO_UI
     ui_task.requestRefresh();
+    #endif
   }
   
   ui_task.loop();  // UI refresh after button handling
