@@ -8,8 +8,17 @@
 
 // ScreenMap — retro dot-grid overlay with a real OpenStreetMap tile fetched
 // over WiFi when credentials + a GPS fix are available. Falls back to a
-// phosphor dot-grid (no real map imagery) if WiFi/PSRAM/network aren't
-// available, so the screen is never blank.
+// phosphor dot-grid (no real map imagery) if WiFi/network aren't available,
+// so the screen is never blank.
+//
+// This board (Cardputer ADV / Stamp-S3A / ESP32-S3FN8) has NO PSRAM despite
+// what the board name suggests — ESP.getPsramSize() reads 0. A decoded
+// 256x256 RGB565 tile (131KB) will not fit in the ~130KB of internal SRAM
+// left free once WiFi/mesh/UI are running. So instead of decoding into an
+// offscreen sprite, we cache only the compressed PNG bytes (~10-40KB, fits
+// comfortably) and decode straight onto the real display on every redraw —
+// LovyanGFX's PNG decoder streams scanline-by-scanline, it doesn't need a
+// full framebuffer to do that.
 //
 // Tile math: standard Web Mercator slippy-map tiles (256x256 px),
 // https://tile.openstreetmap.org/{z}/{x}/{y}.png
@@ -17,7 +26,7 @@
 #define TILE_PX        256
 #define DOT_SELF       4
 #define DOT_NODE       3
-#define TILE_MIN_PSRAM 140000   // ~131KB for a 256x256 RGB565 sprite + headroom
+#define TILE_MAX_BYTES 60000    // sane upper bound for a compressed street tile
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define TILE_FETCH_TIMEOUT_MS   8000
 
@@ -78,6 +87,8 @@ public:
         // keep WiFi connected between tab visits for faster subsequent loads
     }
 
+    ~ScreenMap() { if (_png_buf) free(_png_buf); }
+
     // ── draw ─────────────────────────────────────────────────────────────────
     void draw() override {
         _checkWiFi();
@@ -98,11 +109,20 @@ public:
         int cx = SCREEN_W / 2;
         int cy = CONTENT_Y + CONTENT_H / 2;
 
-        if (_tile_ready) {
+        if (_tile_ready && _png_buf) {
             int off_x, off_y;
             _pixelOffsetInTile(_own_lat, _own_lon, _zoom, off_x, off_y);
-            _tile.pushSprite(&d, cx - off_x, cy - off_y);
-        } else {
+            // Decode straight to the real screen (no PSRAM for an offscreen
+            // buffer) - clip to the content area so it can't paint over the
+            // top/bottom bars.
+            d.setClipRect(0, CONTENT_Y, SCREEN_W, CONTENT_H);
+            if (!d.drawPng(_png_buf, _png_len, cx - off_x, cy - off_y)) {
+                Serial.println("[MAP] drawPng() (redraw) nie powiodlo sie - kasuje kafelek");
+                _tile_ready = false;
+            }
+            d.clearClipRect();
+        }
+        if (!_tile_ready) {
             _drawGrid(d);
         }
 
@@ -148,9 +168,11 @@ private:
     bool _tile_dirty  = false;
     bool _tile_ready  = false;
     bool _fetching    = false;
-    bool _sprite_ready = false;
 
-    LGFX_Sprite _tile;
+    // Cached compressed PNG bytes for the current tile (regular heap - this
+    // board has no PSRAM). Re-decoded to the screen on every redraw.
+    uint8_t* _png_buf = nullptr;
+    int      _png_len = 0;
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
@@ -209,21 +231,6 @@ private:
 
     void _tryFetchTile() {
         if (_fetching) return;
-        if (ESP.getFreePsram() < TILE_MIN_PSRAM) {
-            Serial.printf("[MAP] Za malo PSRAM: wolne=%u calkowite=%u\n",
-                          (unsigned)ESP.getFreePsram(), (unsigned)ESP.getPsramSize());
-            _status = MapStatus::ERR; return;
-        }
-
-        if (!_sprite_ready) {
-            _tile.setPsram(true);
-            _tile.setColorDepth(16);
-            if (!_tile.createSprite(TILE_PX, TILE_PX)) {
-                Serial.println("[MAP] createSprite() nie powiodlo sie");
-                _status = MapStatus::ERR; return;
-            }
-            _sprite_ready = true;
-        }
 
         int tx, ty;
         _latLonToTile(_own_lat, _own_lon, _zoom, tx, ty);
@@ -234,7 +241,7 @@ private:
 
         char url[128];
         snprintf(url, sizeof(url), "https://tile.openstreetmap.org/%d/%d/%d.png", _zoom, tx, ty);
-        Serial.printf("[MAP] Pobieram kafelek: %s\n", url);
+        Serial.printf("[MAP] Pobieram kafelek: %s (wolny heap: %u)\n", url, (unsigned)ESP.getFreeHeap());
 
         bool ok = false;
         HTTPClient http;
@@ -245,8 +252,8 @@ private:
             Serial.printf("[MAP] HTTP GET -> %d\n", code);
             if (code == 200) {
                 int len = http.getSize();
-                if (len > 0 && len < 200000) {
-                    uint8_t* buf = (uint8_t*)ps_malloc(len);
+                if (len > 0 && len < TILE_MAX_BYTES) {
+                    uint8_t* buf = (uint8_t*)malloc(len);
                     if (buf) {
                         WiFiClient* stream = http.getStreamPtr();
                         int read = 0;
@@ -262,13 +269,15 @@ private:
                         }
                         Serial.printf("[MAP] Odebrano %d / %d bajtow\n", read, len);
                         if (read == len) {
-                            _tile.fillSprite(C_BG);
-                            ok = _tile.drawPng(buf, len, 0, 0);
-                            Serial.printf("[MAP] drawPng() -> %s\n", ok ? "OK" : "BLAD DEKODOWANIA");
+                            if (_png_buf) free(_png_buf);
+                            _png_buf = buf;
+                            _png_len = len;
+                            ok = true;
+                        } else {
+                            free(buf);
                         }
-                        free(buf);
                     } else {
-                        Serial.println("[MAP] ps_malloc() na bufor PNG nie powiodlo sie");
+                        Serial.println("[MAP] malloc() na bufor PNG nie powiodlo sie");
                     }
                 } else {
                     Serial.printf("[MAP] Nieprawidlowy rozmiar odpowiedzi: %d\n", len);
