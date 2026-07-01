@@ -58,7 +58,11 @@ public:
 
     void onEnter() override {
         _need_redraw = true;
-        _ensureSD();
+        // SD.begin() jest tymczasowo wylaczone: przy karcie zglaszajacej
+        // problemy komunikacyjne ("no token received") potrafilo zablokowac
+        // cala petle glowna na dlugo (stad zawieszona klawiatura i "znikajacy"
+        // GPS - nic sie po prostu nie odswiezalo). Do wlaczenia z powrotem
+        // (_ensureSD();) po ogarnieciu karty/okablowania SD.
     }
 
     void onLeave() override {}
