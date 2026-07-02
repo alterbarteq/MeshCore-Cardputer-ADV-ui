@@ -68,8 +68,10 @@ void UITaskRetro::begin(DisplayDriver* display, SensorManager* sensors, NodePref
 
     if (_display) _display->turnOn();
 
-    if (node_prefs && node_prefs->screen_timeout_seconds > 0)
-        _screen_timeout = (unsigned long)node_prefs->screen_timeout_seconds * 1000UL;
+    // 0 = "Nigdy" (wybor w ustawieniach) — musi bezposrednio ustawic
+    // _screen_timeout na 0, nie zostac przy domyslnej wartosci czlonka, inaczej
+    // "Nigdy" nie da sie w ogole wybrac (patrz sprawdzenie > 0 w loop()).
+    if (node_prefs) _screen_timeout = (unsigned long)node_prefs->screen_timeout_seconds * 1000UL;
     _auto_off = millis() + _screen_timeout;
 
     _chat.setSendCallback(_onSend, this);
@@ -145,6 +147,24 @@ void UITaskRetro::loop() {
     }
 
     if (_screen_sleeping) return;
+
+    // Ikona nowej wiadomosci (koperta na srodku) — sama znika po uplywie
+    // czasu; wymuszamy pelny redraw ekranu pod nia, zeby faktycznie zniknela
+    // zamiast zostac "wypalona" na ekranie.
+    if (_notify_icon_until != 0) {
+        if (millis() >= _notify_icon_until) {
+            _notify_icon_until = 0;
+            M5Cardputer.Display.fillRect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
+            switch (_active_tab) {
+                case Tab::CHAT:     _chat.onEnter();     break;
+                case Tab::NODES:    _nodes.onEnter();    break;
+                case Tab::MAP:      _map.onEnter();      break;
+                case Tab::SETTINGS: _settings.onEnter(); break;
+                default: break;
+            }
+        }
+        _need_refresh = true;
+    }
 
     // Update node list every 3s
     static uint32_t last_node_update = 0;
@@ -274,6 +294,42 @@ void UITaskRetro::_drawFrame() {
         case Tab::SETTINGS: _settings.draw(); break;
         default: break;
     }
+
+    if (_notify_icon_until != 0 && millis() < _notify_icon_until) {
+        _drawNotifyIcon();
+    }
+}
+
+// Fioletowa koperta na srodku ekranu, widoczna przez 5s po nowej wiadomosci
+// (jesli "Powiadomienie" w ustawieniach jest wlaczone) — rysowana NA WIERZCHU
+// biezacej zawartosci zakladki, niezaleznie ktora jest akurat otwarta.
+void UITaskRetro::_drawNotifyIcon() {
+    M5GFX& d = M5Cardputer.Display;
+    int cx = SCREEN_W / 2;
+    int cy = CONTENT_Y + CONTENT_H / 2 - 4;
+
+    int w = 36, h = 24;
+    int x = cx - w / 2, y = cy - h / 2;
+
+    // Panel pod koperta, zeby byla czytelna niezaleznie od tla pod nia
+    d.fillRect(x - 6, y - 6, w + 12, h + 18, C_BG);
+    d.drawRect(x - 6, y - 6, w + 12, h + 18, C_TEXT_DIM);
+
+    // Koperta — fioletowa ramka, klapka jako dwie przekatne schodzace sie
+    // na srodku gory (blokowy, pixel-artowy styl reszty UI)
+    d.fillRect(x, y, w, h, C_ACCENT);
+    d.fillRect(x + 2, y + 2, w - 4, h - 4, C_BG);
+    for (int i = 0; i < 3; i++) {
+        d.drawLine(x + 2, y + 2 + i, x + w / 2, y + h / 2 + i, C_ACCENT);
+        d.drawLine(x + w - 3, y + 2 + i, x + w / 2, y + h / 2 + i, C_ACCENT);
+    }
+
+    const char* label = "NOWA WIADOMOSC";
+    d.setTextSize(FONT_SM);
+    d.setTextColor(C_ACCENT, C_BG);
+    int tw = strlen(label) * CHAR_W;
+    d.setCursor(cx - tw / 2, y + h + 4);
+    d.print(label);
 }
 
 void UITaskRetro::_closeChannelOverlay() {
@@ -440,7 +496,12 @@ void UITaskRetro::newMsg(uint8_t path_len, const char* from_name,
         _unread_count[ch_idx]++;
     }
     _need_refresh = true;
-    _wakScreen();
+    // "Powiadomienie" w ustawieniach — gdy wylaczone, wiadomosc po prostu
+    // czeka w tle (ekran nie budzi sie, zadnej koperty).
+    if (!_node_prefs || _node_prefs->notify_on_message) {
+        _wakScreen();
+        _notify_icon_until = millis() + 5000;
+    }
 }
 
 void UITaskRetro::msgRead(int msgcount) {}
@@ -479,6 +540,13 @@ void UITaskRetro::_onSettingChange(const char* key, const char* val, void* ctx) 
     if (strcmp(key, "GPS") == 0 && self->_sensors && self->_node_prefs) {
         self->_sensors->setSettingValue("gps",
             self->_node_prefs->gps_enabled ? "1" : "0");
+    }
+
+    // Nowy czas wygaszania obowiazuje natychmiast (nie dopiero po restarcie) —
+    // 0 = "Nigdy" wylacza auto-wygaszanie calkowicie (patrz sprawdzenie > 0 w loop()).
+    if (strcmp(key, "Wygaszanie") == 0 && self->_node_prefs) {
+        self->_screen_timeout = (unsigned long)self->_node_prefs->screen_timeout_seconds * 1000UL;
+        self->_auto_off = millis() + self->_screen_timeout;
     }
 
     if (!self->_node_prefs) return;

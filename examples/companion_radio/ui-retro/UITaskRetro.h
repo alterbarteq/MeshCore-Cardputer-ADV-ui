@@ -58,6 +58,10 @@ private:
     bool _advert_overlay = false;
     int  _advert_sel     = 0;
 
+    // Ikona nowej wiadomosci (koperta na srodku) — 0 = nie pokazywana,
+    // w przeciwnym razie znika sama gdy millis() to przekroczy (patrz loop()).
+    uint32_t _notify_icon_until = 0;
+
     // Hardware
     DisplayDriver* _display    = nullptr;
     SensorManager* _sensors    = nullptr;
@@ -96,6 +100,7 @@ private:
     void _drawAdvertOverlay();
     void _closeAdvertOverlay();
     void _sendAdvert(bool flood);
+    void _drawNotifyIcon();
 
     // Send callback (static trampoline)
     static void _onSend(const char* text, void* ctx);

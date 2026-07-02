@@ -945,7 +945,8 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.bw = 62.5f;
   _prefs.cr = 8;
   _prefs.tx_power_dbm = LORA_TX_POWER;
-  _prefs.screen_timeout_seconds = 300; // 5 minutes default
+  _prefs.screen_timeout_seconds = 30; // retro-UI: 5/10/15/30/Never cycle, default 30s
+  _prefs.notify_on_message = 1;       // retro-UI: wake + envelope icon on new message, on by default
   _prefs.gps_enabled = 0;       // GPS disabled by default
   _prefs.gps_interval = 0;      // No automatic GPS updates by default
   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed

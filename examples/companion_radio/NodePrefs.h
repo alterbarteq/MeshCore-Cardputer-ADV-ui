@@ -35,4 +35,5 @@ struct NodePrefs {  // persisted to file
   char default_scope_name[31];
   uint8_t default_scope_key[16];
   uint16_t screen_timeout_seconds;  // 0=Never, 10, 30, 60, 120, 300 (retro-UI screen sleep)
+  uint8_t  notify_on_message;       // retro-UI: wake screen + show envelope icon on new message (0/1)
 };

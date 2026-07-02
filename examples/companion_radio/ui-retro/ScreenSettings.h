@@ -129,6 +129,16 @@ public:
                 strncpy(_items[_sel].value, _pathHashLabel(_prefs->path_hash_mode), sizeof(_items[0].value)-1);
                 if (_change_fn) _change_fn("Sciezka", _items[_sel].value, _ctx);
                 consumed=true;
+            } else if (ks.enter && strcmp(sel_label,"Wygaszanie")==0 && _prefs) {
+                _prefs->screen_timeout_seconds = _nextScreenTimeout(_prefs->screen_timeout_seconds);
+                strncpy(_items[_sel].value, _screenTimeoutLabel(_prefs->screen_timeout_seconds), sizeof(_items[0].value)-1);
+                if (_change_fn) _change_fn("Wygaszanie", _items[_sel].value, _ctx);
+                consumed=true;
+            } else if (ks.enter && strcmp(sel_label,"Powiadomienie")==0 && _prefs) {
+                _prefs->notify_on_message = !_prefs->notify_on_message;
+                strncpy(_items[_sel].value, _prefs->notify_on_message?"ON":"OFF", sizeof(_items[0].value)-1);
+                if (_change_fn) _change_fn("Powiadomienie", _items[_sel].value, _ctx);
+                consumed=true;
             } else if (ks.enter && _items[_sel].editable) {
                 strncpy(_edit_buf, _items[_sel].value, sizeof(_edit_buf)-1);
                 _edit_buf[sizeof(_edit_buf)-1]='\0';
@@ -165,6 +175,28 @@ private:
             case 1:  return "2 bajty";
             default: return "3 bajty";
         }
+    }
+
+    // Cykl wygaszania ekranu: 5/10/15/30s, potem "Nigdy" (0 = wylaczone —
+    // patrz UITaskRetro::_screen_timeout, 0 oznacza brak auto-wygaszania).
+    static const int SCREEN_TIMEOUT_STEP_COUNT = 5;
+    static constexpr uint16_t SCREEN_TIMEOUT_STEPS[SCREEN_TIMEOUT_STEP_COUNT] = {5, 10, 15, 30, 0};
+
+    static const char* _screenTimeoutLabel(uint16_t secs) {
+        switch (secs) {
+            case 5:  return "5s";
+            case 10: return "10s";
+            case 15: return "15s";
+            case 30: return "30s";
+            default: return "Nigdy";
+        }
+    }
+
+    static uint16_t _nextScreenTimeout(uint16_t secs) {
+        for (int i = 0; i < SCREEN_TIMEOUT_STEP_COUNT; i++) {
+            if (SCREEN_TIMEOUT_STEPS[i] == secs) return SCREEN_TIMEOUT_STEPS[(i + 1) % SCREEN_TIMEOUT_STEP_COUNT];
+        }
+        return SCREEN_TIMEOUT_STEPS[0];   // nieznana wartosc (np. stare "Timeout s" w sekundach) -> zacznij od 5s
     }
 
     static uint8_t _battPct(uint16_t mv) {
@@ -207,9 +239,9 @@ private:
         // ── Siec / WiFi (do mapy) ───────────────────────────────────────────
         _addItem("WiFi SSID", s_wifi_ssid[0]?s_wifi_ssid:"", true);
         _addItem("WiFi Pass", s_wifi_pass[0]?"****":"", true);
-        char to[8]; snprintf(to,sizeof(to),"%d",_prefs?_prefs->screen_timeout_seconds:300);
-        _addItem("Timeout s", to, true);
+        _addItem("Wygaszanie", _screenTimeoutLabel(_prefs?_prefs->screen_timeout_seconds:300), false);
         _addItem("GPS", _prefs?(_prefs->gps_enabled?"ON":"OFF"):"?", true);
+        _addItem("Powiadomienie", _prefs?(_prefs->notify_on_message?"ON":"OFF"):"?", true);
 
         char posbuf[32];
         if (_gps_fix) snprintf(posbuf,sizeof(posbuf),"%.4fN %.4fE", _lat6/1e6, _lon6/1e6);
@@ -274,7 +306,6 @@ private:
             else if (strcmp(lbl,"SF")==0)        _prefs->sf=atoi(_edit_buf);
             else if (strcmp(lbl,"BW kHz")==0)    _prefs->bw=atof(_edit_buf);
             else if (strcmp(lbl,"TX Power")==0)  _prefs->tx_power_dbm=atoi(_edit_buf);
-            else if (strcmp(lbl,"Timeout s")==0) _prefs->screen_timeout_seconds=atoi(_edit_buf);
         }
         if (strcmp(lbl,"GPS")==0 && _prefs) { _prefs->gps_enabled=!_prefs->gps_enabled; strncpy(_items[_sel].value,_prefs->gps_enabled?"ON":"OFF",sizeof(_items[0].value)-1); }
         if (_change_fn) _change_fn(lbl, _edit_buf, _ctx);
@@ -285,3 +316,11 @@ private:
         if (_sel>=_scroll+SETTINGS_ROWS)   _scroll=_sel-SETTINGS_ROWS+1;
     }
 };
+
+// Ten build nie uzywa C++17 (brak inline static constexpr data members) —
+// bez tej definicji dostep do SCREEN_TIMEOUT_STEPS przez indeks w runtime
+// (nie stala czasu kompilacji) daje "undefined reference" przy linkowaniu.
+// `inline` (nie tylko constexpr) jest tu konieczne, bo ten naglowek jest
+// wlaczany do wiecej niz jednej jednostki translacji (main.cpp, UITaskRetro.cpp)
+// — bez inline linker widzi dwie definicje tego samego symbolu.
+inline constexpr uint16_t ScreenSettings::SCREEN_TIMEOUT_STEPS[];

@@ -234,6 +234,10 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     file.read((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
     file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));      // 121
     file.read((uint8_t *)&_prefs.screen_timeout_seconds, sizeof(_prefs.screen_timeout_seconds)); // 137
+    // On a prefs file saved before this field existed, read() hits EOF and
+    // leaves _prefs.notify_on_message untouched — i.e. whatever MyMesh::begin()
+    // set it to (1/on) just before loadPrefs() ran, not silently reset to 0.
+    file.read((uint8_t *)&_prefs.notify_on_message, sizeof(_prefs.notify_on_message));         // 139
 
     file.close();
   }
@@ -275,6 +279,7 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     file.write((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
     file.write((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));      // 121
     file.write((uint8_t *)&_prefs.screen_timeout_seconds, sizeof(_prefs.screen_timeout_seconds)); // 137
+    file.write((uint8_t *)&_prefs.notify_on_message, sizeof(_prefs.notify_on_message));         // 139
 
     file.close();
   }
